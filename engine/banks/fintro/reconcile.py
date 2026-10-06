@@ -17,9 +17,10 @@ def merge_opposing_account_name(column_value: str, details_value: str) -> str:
     Rules (normalized, accent- and whitespace-insensitive):
     - If one side is empty, the other is returned as-is.
     - If column is fully contained in details and details starts with it,
-      return 'column + remaining tail of details'.
-    - If column matches details but not at the start, return the column value.
-    - Otherwise raise ValueError.
+      return 'column + remaining tail of details'. A leading filler "VAN" in
+      details is dropped first when that makes it start with the column.
+    - Otherwise raise ValueError: text before the column name, or a different
+      name, would be lost or guessed; the fix belongs in the parser.
     """
     if not column_value:
         return details_value
@@ -32,8 +33,18 @@ def merge_opposing_account_name(column_value: str, details_value: str) -> str:
     if column_norm not in details_norm:
         raise ValueError(f"Opposing account name mismatch: column='{column_value}' details='{details_value}'")
 
+    # "VAN" is a filler in some transfer variants ("EUROPESE OVERSCHRIJVING VAN ACME VZW ...") but
+    # also the start of names ("VAN DER MEULEN TOM"); only the column name can tell them apart.
+    if not details_norm.startswith(column_norm) and details_value.upper().startswith("VAN "):
+        without_filler = details_value[4:].lstrip()
+        if normalize_for_comparison(without_filler).startswith(column_norm):
+            details_value, details_norm = without_filler, normalize_for_comparison(without_filler)
+
     if not details_norm.startswith(column_norm):
-        return column_value
+        raise ValueError(
+            "Opposing account name: details has text before the column name "
+            f"(would be lost): column='{column_value}' details='{details_value}'"
+        )
 
     tail_norm_len = len(details_norm) - len(column_norm)
     if tail_norm_len <= 0:

@@ -20,6 +20,7 @@ Runs unattended from a TrueNAS cron job.
 | [engine/core/](engine/core/) | Shared pipeline modules: `csv_runtime`, `csv_validation`, `duplicate_index`, `completion`, `runtime` |
 | [engine/banks/](engine/banks/) | One sub-package per bank. Each must export `normalize_row()` |
 | [engine/banks/fintro/](engine/banks/fintro/) | Reference bank: `normalize_row`, `extract_details`, `parsers`, `reconcile`; `debug_row` shows how a row is parsed |
+| [engine/regression.py](engine/regression.py) | Regression test: every row of the bank CSVs through a git ref and the working tree, reporting each changed result |
 | [engine/firefly/](engine/firefly/) | Firefly III import: `api` (REST client), `import_normalized` (importer) |
 | [deploy/](deploy/) | Source of root-side helper scripts; installed by hand on each server, never run from here (see "Root helper") |
 | [config/](config/) | `<bank>.yaml` configs (bank name is the filename) + `app.env` (`FIREFLY_URL`, `FIREFLY_TOKEN`) |
@@ -50,8 +51,8 @@ SFTP watcher excludes that file, so a local copy is never uploaded over it.
 PYTHONPATH=. python3 -m engine.process_csv <csv_path> <YYYYMMDD-HHMMSS> <logfile_path>
 
 # Debug failing rows: every parser step, the values found, and the exact failure.
-# <line> = "source row" in the normalizer log <ts>-<name>.log (reads only)
-PYTHONPATH=. python3 -m engine.banks.fintro.debug_row <csv> <line> [<line> ...]
+# <line> = "source row" in the normalizer log <ts>-<name>.log, or a Volgnummer (reads only)
+PYTHONPATH=. python3 -m engine.banks.fintro.debug_row <csv> <line-or-Volgnummer> [...]
 
 # Importer only; --dry-run builds every request but sends and moves nothing
 PYTHONPATH=. python3 -m engine.firefly.import_normalized [--dry-run] [--show N] [csv ...]
@@ -67,7 +68,15 @@ ruff check .
 ```
 Config: [ruff.toml](ruff.toml) — line-length 120, py310 target, selects `E,F,W,I,UP,B`.
 
-No test suite. Verify the normalizer by placing a sample CSV in `data/incoming/`
+Regression test, before every parser change is committed (desktop, in the repo;
+the originals are only read via the share; exit 1 when anything changed):
+
+```bash
+python -m engine.regression [--base REF] [--show N] "//<server>/bank-csv-normalizer/bank-csv-originals/*.csv"
+```
+
+Every reported change must be explained: fixed rows, and changed outputs that
+only add information. Verify the normalizer end to end by placing a sample CSV in `data/incoming/`
 and inspecting `data/normalized/`, `data/failed/`, and `data/logs/` (failure
 reasons are in the normalizer log, not the `-import.log`); verify
 the importer with `--dry-run` on the server (the token lives there).
@@ -90,6 +99,15 @@ Importer — [engine/firefly/import_normalized.py](engine/firefly/import_normali
 (files stay in `data/normalized/`; alerted once per outage via
 `data/firefly-import-blocked.flag`). `data/firefly-recalculate.flag` marks a batch
 follow-up that is still pending (see below).
+
+## Normalization principle
+
+**No meaningful information may be lost.** Every piece of the bank row that says
+something about the transaction must end up in a normalized field. The parser
+may drop only text that adds nothing — a filler or label (`VAN`, `MEDEDELING :`)
+or a repeat of something already kept — and only explicitly, through a named
+pattern or rule. Anything it cannot place makes the row fail; the fix then goes
+into the parser (`debug_row` shows where a row gets stuck).
 
 ## Firefly III Import
 

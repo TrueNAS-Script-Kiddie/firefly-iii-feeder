@@ -89,7 +89,10 @@ Precedence rules live in [engine/banks/fintro/normalize_row.py](../../engine/ban
 
 `merge_opposing_account_name` and `reconcile_transaction_types` in
 [engine/banks/fintro/reconcile.py](../../engine/banks/fintro/reconcile.py) encode the
-field-by-field rules.
+field-by-field rules. The counterparty name is the column name plus whatever the
+details add after it (often the address); a leading filler `VAN` is dropped only
+when the column name proves it is not part of the name (`VAN DER MEULEN TOM`).
+Both follow the normalization principle in AGENTS.md: nothing meaningful is lost.
 
 ## 6. Two-Phase `normalize_row` + Sequential `details` Parsing
 

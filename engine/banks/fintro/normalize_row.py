@@ -87,6 +87,8 @@ REPLACE_IN_DETAILS_TRANSACTION_TYPE = [
     ("EUROPESE OVERSCHRIJVING", "Europese overschrijving"),
     ("VIA WEB BANKING", "via Web Banking"),
     ("VIA MOBILE BANKING", "via Mobile Banking"),
+    ("VIA DERDE PARTIJ", "via derde partij"),
+    ("NA AFSLUITING REKENING", "na afsluiting rekening"),
     ("OVERSCHRIJVING", "Overschrijving"),
     ("TERUGBETALING MET DEBETKAART", "Terugbetaling met debetkaart"),
     ("BANCONTACT Betaling", "Bancontact betaling"),

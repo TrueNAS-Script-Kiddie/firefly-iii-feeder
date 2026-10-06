@@ -4,13 +4,15 @@ details parser (what it cut off, what was left), the values it found, and the
 final result or the exact reason the row fails.
 
 Usage (on the server, where the CSVs are; reads only, writes nothing):
-  PYTHONPATH=. python3 -m engine.banks.fintro.debug_row <csv> <line> [<line> ...]
+  PYTHONPATH=. python3 -m engine.banks.fintro.debug_row <csv> <row> [<row> ...]
 
-<line> is the line number in the CSV (the header is line 1), as in the
-normalizer log: "Normalize failed on source row <line>: ...".
+<row> is either a line number in the CSV (the header is line 1), as in the
+normalizer log ("Normalize failed on source row <line>: ..."), or a Volgnummer
+like 2019-00135 (also matches filtered rows, e.g. pending ones: 2026-).
 """
 
 import os
+import re
 import sys
 
 import engine.banks.fintro as fintro
@@ -78,14 +80,26 @@ def main() -> int:
         print(__doc__)
         return 2
     path = sys.argv[1]
-    lines = sorted({int(arg) for arg in sys.argv[2:]})
 
     raw_rows = load_csv_rows(path)
     bank_cfg = autodetect_bank(raw_rows, load_all_bank_configs(os.path.join(BASE_DIR, "config")))
-    validated_rows, _, _ = validate_and_prepare(raw_rows, bank_cfg)
+    validated_rows, column_map, _ = validate_and_prepare(raw_rows, bank_cfg)
     by_line = {row["_source_line"]: row for row in validated_rows}
 
-    for line in lines:
+    # Arguments: line numbers, or Volgnummers resolved to their line(s) among all raw rows
+    lines: set[int] = set()
+    for arg in sys.argv[2:]:
+        if arg.isdigit():
+            lines.add(int(arg))
+        elif re.fullmatch(r"\d{4}-\d*", arg):
+            found = [i + 2 for i, raw in enumerate(raw_rows) if raw.get(column_map["external_id"], "").strip() == arg]
+            if not found:
+                print(f"== Volgnummer {arg}: not in {os.path.basename(path)}\n")
+            lines.update(found)
+        else:
+            print(f"== {arg!r}: neither a line number nor a Volgnummer (YYYY-NNNNN)\n")
+
+    for line in sorted(lines):
         print(f"== line {line} of {os.path.basename(path)}")
         row = by_line.get(line)
         if row is not None:

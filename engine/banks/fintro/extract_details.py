@@ -16,8 +16,12 @@ from typing import Any
 from engine.banks.fintro.parsers import parse_ddmmyyyy, parse_ddmmyyyy_time, parse_iban
 
 # Reused by multiple blocks below (DOORLOPENDE OPDRACHT, OVERSCHRIJVING, MOBIELE BETALING).
+# Country code + check digits are always written together (BE57, never "LN 35" from an
+# address like "STATIONS-LN 12 B3"), followed by either the rest in one piece
+# (NL91ABNA0417164300) or blocks of 4 with single spaces (BE68 5390 0754 7034).
 RE_IBAN_BIC = re.compile(
-    r"\b([A-Z]{2}\s*\d{2}(?:\s*[A-Z0-9]){11,30})\s+BIC\s+([A-Z]{6}[A-Z0-9]{2}(?:[A-Z0-9]{3})?)\b",
+    r"\b([A-Z]{2}\d{2}(?:[A-Z0-9]{11,30}|(?: [A-Z0-9]{4}){2,7}(?: [A-Z0-9]{1,4})?))"
+    r"\s+BIC\s+([A-Z]{6}[A-Z0-9]{2}(?:[A-Z0-9]{3})?)\b",
     re.IGNORECASE,
 )
 
@@ -219,11 +223,6 @@ def extract_details(
     match = RE_OVERSCHRIJVING.search(remaining_details)
     if match:
         details_match_type = "Overschrijving"
-        # details_transaction_type
-        prefix = (match.group(1) or "").strip()
-        core = match.group(2).strip()
-        via = (match.group(6) or "").strip()
-        details_transaction_type = " ".join(x for x in [prefix, core, via] if x).strip()
         # details_technical_reference
         if match.group(8) and match.group(10):
             details_technical_reference = match.group(8).strip() + " : " + match.group(10).strip()
@@ -234,7 +233,19 @@ def extract_details(
             details_opposing_account_iban = parse_iban(match_iban_bic.group(1))
             details_opposing_account_bic = match_iban_bic.group(2)
             rest = rest.replace(match_iban_bic.group(0), "").strip()
+        # Kind of transfer written before the name ("VIA DERDE PARTIJ KLARNA ...", "NA AFSLUITING
+        # REKENING ..."): it describes the transfer, so it joins the transaction type, not the name
+        kind = ""
+        match_kind = re.match(r"(VIA DERDE PARTIJ|NA AFSLUITING REKENING)\s+", rest, re.IGNORECASE)
+        if match_kind:
+            kind = match_kind.group(1)
+            rest = rest[match_kind.end() :]
         details_opposing_account_name = rest.strip()
+        # details_transaction_type
+        prefix = (match.group(1) or "").strip()
+        core = match.group(2).strip()
+        via = (match.group(6) or "").strip()
+        details_transaction_type = " ".join(x for x in [prefix, core, kind, via] if x).strip()
         remaining_details = remaining_details.replace(match.group(0), "").strip()
         record_step(trace, "OVERSCHRIJVING", match.group(0), remaining_details)
 
