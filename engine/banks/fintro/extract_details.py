@@ -108,7 +108,8 @@ def extract_details(
         r"^((?:MAANDELIJKSE )?EQUIPERINGSKOSTEN VOOR DE PERIODE .+?)(?:\s+DETAILS ZIE BIJLAGE)?$"
         # group 6: fee description
         r"|"
-        r"^(GEBRUIKSKOSTEN VOOR DE PERIODE .+?)(?:\s+DETAILS ZIE BIJLAGE)?$"  # group 7: fee description
+        r"^((?:MAANDELIJKSE )?GEBRUIKSKOSTEN VOOR DE PERIODE .+?)(?:\s+DETAILS ZIE BIJLAGE)?$"
+        # group 7: fee description
         r"|"
         r"^(INSCHRIJVING OP BELGISCHE EFFECTEN REFERTE : [0-9]+)$"  # group 8: pensioensparen
         r"|"
