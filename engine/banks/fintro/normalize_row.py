@@ -70,11 +70,11 @@ REPLACE_IN_DETAILS_TRANSACTION_TYPE = [
     ("GELDOPNEMING MET DEBETKAART NUMMER", "Geldopneming met debetkaart"),
     (
         "GELDOPNAME IN BUITENLAND AAN ANDERE AUTOMATEN MET KAART",
-        "Geldopneming in buitenland aan andere automaten met debetkaart",
+        "Buitenlandse geldopneming aan andere automaten met debetkaart",
     ),
     (
         "GELDOPNEMING IN BUITENLAND AAN ANDERE AUTOMATEN MET DEBETKAART NUMMER",
-        "Geldopneming in buitenland aan andere automaten met debetkaart",
+        "Buitenlandse geldopneming aan andere automaten met debetkaart",
     ),
     ("GELDOPNAME AAN ANDERE AUTOMATEN MET KAART", "Geldopneming aan andere automaten met debetkaart"),
     ("GELDOPNAME AAN ONZE AUTOMATEN MET KAART", "Geldopneming aan onze automaten met debetkaart"),
@@ -89,30 +89,30 @@ REPLACE_IN_DETAILS_TRANSACTION_TYPE = [
         "GELDOPNEMING AAN ONZE AUTOMATEN BE MET DEBETKAART NUMMER",
         "Geldopneming aan onze automaten met debetkaart",
     ),
-    ("INSTANT EUROPESE OVERSCHRIJVING", "Europese instantoverschrijving"),
+    ("INSTANT EUROPESE OVERSCHRIJVING", "Instantoverschrijving"),
     ("INSTANT OVERSCHRIJVING", "Instantoverschrijving"),
     ("INSTANTOVERSCHRIJVING", "Instantoverschrijving"),
-    ("EERSTE INVORDERING VAN EEN EUROPESE DOMICILIERING", "Eerste invordering van een Europese domiciliëring"),
-    ("EUROPESE DOMICILIERING", "Europese domiciliëring"),
-    ("EUROPESE OVERSCHRIJVING", "Europese overschrijving"),
+    ("EERSTE INVORDERING VAN EEN EUROPESE DOMICILIERING", "Domiciliëring, eerste invordering"),
+    ("EUROPESE DOMICILIERING", "Domiciliëring"),
+    ("EUROPESE OVERSCHRIJVING", "Overschrijving"),
     ("VIA WEB BANKING", "via Web Banking"),
     ("VIA MOBILE BANKING", "via Mobile Banking"),
     ("VIA DERDE PARTIJ", "via derde partij"),
     ("NA AFSLUITING REKENING", "na afsluiting rekening"),
     ("OVERSCHRIJVING", "Overschrijving"),
     ("TERUGBETALING MET DEBETKAART", "Terugbetaling met debetkaart"),
-    ("BANCONTACT P2P MOBILE Betaling", "Bancontact P2P mobile betaling"),
+    ("BANCONTACT P2P MOBILE Betaling", "P2P mobile Bancontact betaling"),
     ("P2P MOBILE Betaling", "P2P mobile betaling"),
     ("BANCONTACT Betaling", "Bancontact betaling"),
     ("BANCONTACT Terugbetaling", "Bancontact terugbetaling"),
     ("BANCONTACT Geldopneming", "Bancontact geldopneming"),
-    ("BANCONTACT PAYCONIQ Betaling", "Bancontact Payconiq betaling"),
+    ("BANCONTACT PAYCONIQ Betaling", "Payconiq Bancontact betaling"),
     ("WERO Instantoverschrijving", "Wero instantoverschrijving"),
-    ("VISA DEBIT - CONTACTLOOS Betaling", "Visa Debit (contactloos) betaling"),
-    ("VISA DEBIT - eCommerce Betaling", "Visa Debit (eCommerce) betaling"),
-    ("VISA DEBIT Betaling", "Visa Debit betaling"),
-    ("VISA DEBIT Geldopneming", "Visa Debit geldopneming"),
-    ("BANCONTACT MOBIELE KAARTBETALING", "Mobiele betaling met debetkaart"),
+    ("VISA DEBIT - CONTACTLOOS Betaling", "Contactloze Visa betaling"),
+    ("VISA DEBIT - eCommerce Betaling", "Online Visa betaling"),
+    ("VISA DEBIT Betaling", "Visa betaling"),
+    ("VISA DEBIT Geldopneming", "Visa geldopneming"),
+    ("BANCONTACT MOBIELE KAARTBETALING", "Mobiele Bancontact betaling"),
     (
         "STORTING OP DE REKENING GEKOPPELD AAN DE DEBETKAART NUMMER",
         "Storting op de rekening gekoppeld aan de debetkaart",
@@ -121,7 +121,7 @@ REPLACE_IN_DETAILS_TRANSACTION_TYPE = [
 
 REPLACE_IN_COLUMN_TRANSACTION_TYPE = [
     ("Diverse Debetverrichtingen", "Diverse debetverrichtingen"),
-    ("Hypotheekleningen Terugbetalingen", "Hypotheekleningen terugbetalingen"),
+    ("Hypotheekleningen Terugbetalingen", "Terugbetaling hypotheeklening"),
     ("Kaartbetaling", "Betaling met debetkaart"),
     ("Geldopname met kaart", "Geldopneming met debetkaart"),
     ("Overschrijving buitenland", "Buitenlandse overschrijving"),
@@ -348,6 +348,8 @@ def normalize_row(csv_row: dict[str, str]) -> dict[str, Any]:
     # details_transaction_type -> notes
     if details_transaction_type:
         details_transaction_type = apply_replacements(details_transaction_type, REPLACE_IN_DETAILS_TRANSACTION_TYPE)
+        # Any other way of paying than the ones in the table, as Fintro writes it: "Google Pay Visa betaling"
+        details_transaction_type = re.sub(r"VISA DEBIT - (.+?) Betaling", r"\1 Visa betaling", details_transaction_type)
         RE_NORMALIZE_CARDNUMBER = re.compile(r"\b(\d{4} \d{2}XX XXXX) X(\d{3}) (\d)\b")
         details_transaction_type = RE_NORMALIZE_CARDNUMBER.sub(
             lambda match: f"{match.group(1)} {match.group(2)}{match.group(3)}", details_transaction_type

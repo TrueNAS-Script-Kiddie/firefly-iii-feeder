@@ -109,6 +109,15 @@ or a repeat of something already kept — and only explicitly, through a named
 pattern or rule. Anything it cannot place makes the row fail; the fix then goes
 into the parser (`debug_row` shows where a row gets stuck).
 
+## Fintro message markers
+
+Incoming payments from employers, health funds and unions start their free text
+with `/A/`, `/B/` or `/C/`. The marker stays in `description` unchanged. By payer
+(inferred from the data, no official definition found): `/A/` wages (employers),
+`/B/` replacement-income benefits (health fund, union, unemployment fund),
+`/C/` reimbursed care (health fund, lines like `PREST HUISARTS`). Meant for
+filtering/tagging later.
+
 ## Firefly III Import
 
 One `POST /api/v1/transactions` per row, with `error_if_duplicate_hash`, so

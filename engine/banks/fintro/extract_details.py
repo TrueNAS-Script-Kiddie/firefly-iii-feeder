@@ -289,8 +289,9 @@ def extract_details(
         r"( OM)?"  # group 6: drop
         r"( [0-9]{2}:[0-9]{2}| [0-9]{2} U [0-9]{2})?"  # group 7: details_payment_date (time)
         r"(.*?)"  # group 8: details_exchange_and_transaction_costs (optional free text)
-        r"( BANCONTACT| VISA DEBIT - CONTACTLOOS| VISA DEBIT - eCommerce| VISA DEBIT)?"
-        # group 9: details_transaction_type (part 1 secondary)
+        r"( BANCONTACT| VISA DEBIT(?: - [A-Za-z][A-Za-z ]*)?)?"
+        # group 9: details_transaction_type (part 1 secondary); after "VISA DEBIT - " the way of paying
+        # (CONTACTLOOS, eCommerce, Google Pay): letters only, so an amount or date never ends up here
         r"$",
         re.IGNORECASE,
     )

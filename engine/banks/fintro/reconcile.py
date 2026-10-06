@@ -138,8 +138,9 @@ def reconcile_transaction_types(
             column_transaction_type_norm == "TEGENBOEKINGBETAALDEDOMICILIERING"
             and details_transaction_type_norm == "GEWEIGERDEEUROPESEDOMICILIERING"
         ):
-            column_transaction_type = "Tegenboeking van geweigerde / betaalde / Europese Domiciliëring" + (
-                f" op datum {details_dom_date}" if details_dom_date else ""
+            # "betaalde" is implied by "tegenboeking"; "Europese" holds for every domiciliëring since 2014
+            column_transaction_type = "Tegenboeking geweigerde domiciliëring" + (
+                f" van {details_dom_date}" if details_dom_date else ""
             )
             details_transaction_type = ""
         elif column_transaction_type_norm == "AFLOSSINGKREDIET" and details_transaction_type_norm == "OVERSCHRIJVING":
@@ -174,7 +175,7 @@ def reconcile_transaction_types(
                 details_transaction_type = "Geldopneming met debetkaart " + details_transaction_type
                 column_transaction_type = ""
             elif column_transaction_type == "Geldopname in buitenland":
-                details_transaction_type = "Geldopneming in buitenland met debetkaart " + details_transaction_type
+                details_transaction_type = "Buitenlandse geldopneming met debetkaart " + details_transaction_type
                 column_transaction_type = ""
         elif details_transaction_type_norm in column_transaction_type_norm:
             details_transaction_type = ""
