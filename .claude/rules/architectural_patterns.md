@@ -231,7 +231,8 @@ one `POST /api/v1/transactions`.
   stop the run and leave files in place, alerted once per outage via
   `data/firefly-import-blocked.flag`; any other rejection fails only that row
   (to `data/failed/<ts>-<name>-import-failed.csv`) and the file moves to
-  `data/imported/` as `<ts>-<name>-imported-partial.csv`.
+  `data/imported/` as `<ts>-<name>-imported-partial.csv`. A file the normalizer
+  already marked `-normalized-partial` also ends up `-imported-partial`.
 - **Mode per run** — per row for recent data, batch (`batch_submission`) when
   more than `BATCH_OLD_ROWS_THRESHOLD` rows are older than
   `BATCH_OLD_ROW_AGE_DAYS`, relative to the day of the run. Per row, Firefly

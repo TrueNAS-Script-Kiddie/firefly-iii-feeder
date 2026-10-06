@@ -22,7 +22,15 @@ RE_IBAN_BIC = re.compile(
 )
 
 
-def extract_details(details: str, primary_transaction_date_iso: str) -> dict[str, Any]:
+def record_step(trace: list[tuple[str, str, str]] | None, step: str, removed: str, remaining: str) -> None:
+    """Debug trace for debug_row: what a step cut out and what is left."""
+    if trace is not None:
+        trace.append((step, removed, remaining))
+
+
+def extract_details(
+    details: str, primary_transaction_date_iso: str, trace: list[tuple[str, str, str]] | None = None
+) -> dict[str, Any]:
     """
     Parse the free-text 'details' column into a dict of named fields.
 
@@ -31,6 +39,9 @@ def extract_details(details: str, primary_transaction_date_iso: str) -> dict[str
     and (b) the cutoff for the legacy 'old transaction' fallback pattern.
 
     Raises ValueError if unmatched residual content remains after all patterns.
+
+    `trace`, when given, collects (step, removed text, remaining text) per matched
+    step (see debug_row).
     """
     remaining_details = details
 
@@ -56,6 +67,7 @@ def extract_details(details: str, primary_transaction_date_iso: str) -> dict[str
     if match:
         details_booking_date = parse_ddmmyyyy(match.group(1))
         remaining_details = remaining_details.replace(match.group(0), "").strip()
+        record_step(trace, "VALUTADATUM", match.group(0), remaining_details)
 
     # BANKREFERENTIE -> details_bank_reference
     RE_BANK_REFERENCE = re.compile(r"BANKREFERENTIE\s*:\s*([0-9]+)$")
@@ -63,6 +75,7 @@ def extract_details(details: str, primary_transaction_date_iso: str) -> dict[str
     if match:
         details_bank_reference = match.group(1)
         remaining_details = remaining_details.replace(match.group(0), "").strip()
+        record_step(trace, "BANKREFERENTIE", match.group(0), remaining_details)
 
     # UITGEVOERD OP -> details_transaction_processing_date
     RE_TRANSACTION_PROCESSING_DATE = re.compile(r"UITGEVOERD OP\s+(\d{2}/\d{2}(?:/\d{4})?)$")
@@ -72,6 +85,7 @@ def extract_details(details: str, primary_transaction_date_iso: str) -> dict[str
             match.group(1), fallback_date_str=primary_transaction_date_iso
         )
         remaining_details = remaining_details.replace(match.group(0), "").strip()
+        record_step(trace, "UITGEVOERD OP", match.group(0), remaining_details)
 
     # MEDEDELING, TERUGBETALING WOONKREDIET, MAANDELIJKSE BIJDRAGE, BONUS, NETTO INTERESTEN, EQUIPERINGSKOSTEN,
     # GEBRUIKSKOSTEN, EFFECTEN, KREDIET -> details_description
@@ -111,6 +125,7 @@ def extract_details(details: str, primary_transaction_date_iso: str) -> dict[str
             or match.group(9)
         ).strip()
         remaining_details = remaining_details.replace(match.group(0), "").strip()
+        record_step(trace, "DESCRIPTION", match.group(0), remaining_details)
 
     # ZONDER MEDEDELING -> details_no_description
     RE_NO_DESCRIPTION = re.compile(r"\bZONDER\s+MEDEDELING\b$")
@@ -119,6 +134,7 @@ def extract_details(details: str, primary_transaction_date_iso: str) -> dict[str
         details_match_type = "No description"
         details_no_description = True
         remaining_details = remaining_details.replace(match.group(0), "").strip()
+        record_step(trace, "ZONDER MEDEDELING", match.group(0), remaining_details)
 
     # STORTING -> details_opposing_account_name, details_payment_date, details_transaction_type
     RE_STORTING = re.compile(
@@ -136,6 +152,7 @@ def extract_details(details: str, primary_transaction_date_iso: str) -> dict[str
         details_payment_date = parse_ddmmyyyy_time(match.group(6), None)
         details_transaction_type = match.group(1) + match.group(4) + match.group(5)
         remaining_details = remaining_details.replace(match.group(0), "").strip()
+        record_step(trace, "STORTING", match.group(0), remaining_details)
 
     # DOORLOPENDE OPDRACHT -> details_transaction_type, details_opposing_account_name
     RE_DOORLOPENDE_OPDRACHT = re.compile(
@@ -156,6 +173,7 @@ def extract_details(details: str, primary_transaction_date_iso: str) -> dict[str
             rest = rest.replace(match_iban_bic.group(0), "").strip()
         details_opposing_account_name = rest
         remaining_details = remaining_details.replace(match.group(0), "").strip()
+        record_step(trace, "DOORLOPENDE OPDRACHT", match.group(0), remaining_details)
 
     # DOMICILIERING -> details_transaction_type, details_opposing_account_name, details_dom_date,
     # details_technical_reference
@@ -178,6 +196,7 @@ def extract_details(details: str, primary_transaction_date_iso: str) -> dict[str
         details_dom_date = (match.group(5) or "").strip()
         details_technical_reference = (match.group(6) + match.group(7) + match.group(8) + match.group(9)).strip()
         remaining_details = remaining_details.replace(match.group(0), "").strip()
+        record_step(trace, "DOMICILIERING", match.group(0), remaining_details)
 
     # OVERSCHRIJVING -> details_transaction_type, details_technical_reference, details_opposing_account_iban,
     # details_opposing_account_bic, details_opposing_account_name
@@ -217,6 +236,7 @@ def extract_details(details: str, primary_transaction_date_iso: str) -> dict[str
             rest = rest.replace(match_iban_bic.group(0), "").strip()
         details_opposing_account_name = rest.strip()
         remaining_details = remaining_details.replace(match.group(0), "").strip()
+        record_step(trace, "OVERSCHRIJVING", match.group(0), remaining_details)
 
     # BETALING -> details_transaction_type, details_opposing_account_name, details_payment_date,
     # details_exchange_and_transaction_costs
@@ -251,6 +271,7 @@ def extract_details(details: str, primary_transaction_date_iso: str) -> dict[str
         details_payment_date = parse_ddmmyyyy_time(match.group(5), match.group(7))
         details_exchange_and_transaction_costs = match.group(8).strip()
         remaining_details = remaining_details.replace(match.group(0), "").strip()
+        record_step(trace, "BETALING", match.group(0), remaining_details)
 
     # MOBIELE BETALING -> details_transaction_type, details_opposing_account_iban, details_opposing_account_bic,
     # details_opposing_account_name
@@ -275,6 +296,7 @@ def extract_details(details: str, primary_transaction_date_iso: str) -> dict[str
             rest = rest.replace(match_iban_bic.group(0), "").strip()
         details_opposing_account_name = rest
         remaining_details = remaining_details.replace(match.group(0), "").strip()
+        record_step(trace, "MOBIELE BETALING", match.group(0), remaining_details)
 
     # GELDOPNEMING -> details_transaction_type, details_opposing_account_name, details_payment_date
     RE_GELDOPNEMING = re.compile(
@@ -300,6 +322,7 @@ def extract_details(details: str, primary_transaction_date_iso: str) -> dict[str
         details_opposing_account_name = match.group(3).strip()
         details_payment_date = parse_ddmmyyyy_time(match.group(4), match.group(5))
         remaining_details = remaining_details.replace(match.group(0), "").strip()
+        record_step(trace, "GELDOPNEMING", match.group(0), remaining_details)
 
     # Old transactions -> details_transaction_type, details_opposing_account_name
     if remaining_details and primary_transaction_date_iso < "2018-09-01":
@@ -316,6 +339,7 @@ def extract_details(details: str, primary_transaction_date_iso: str) -> dict[str
             if match.group(1):
                 details_transaction_type = match.group(1).strip()
             details_opposing_account_name = match.group(3).strip()
+            record_step(trace, "OLD TRANSACTION", remaining_details, "")
             remaining_details = ""
 
     # Remaining details

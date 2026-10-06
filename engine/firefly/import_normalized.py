@@ -3,6 +3,7 @@ Import normalized CSVs from data/normalized/ into Firefly III via its REST API.
 
 One POST per transaction; runs with many old rows use batch mode. Per file:
   - every row imported / already present -> file moved to data/imported/
+    (as -imported-partial when the normalizer already dropped rows of the bank CSV)
   - some rows failed -> failed rows to data/failed/<ts>-<name>-import-failed.csv,
     file moved to data/imported/ as -imported-partial, alert on stderr
   - Firefly unreachable or token refused -> run stops, file stays for the next run;
@@ -219,7 +220,9 @@ def import_file(
     name = os.path.basename(path)
     # '<ts>-<name>-normalized[-partial].csv' -> '<ts>-<name>': every output keeps the
     # normalizer's run timestamp, so all files of one bank CSV sort together
-    base = re.sub(r"-normalized(-partial)?$", "", os.path.splitext(name)[0])
+    stem = os.path.splitext(name)[0]
+    base = re.sub(r"-normalized(-partial)?$", "", stem)
+    normalized_partial = stem.endswith("-normalized-partial")
     logfile = os.path.join(LOG_DIR, f"{base}-import.log")
 
     def log(message: str) -> None:
@@ -291,7 +294,8 @@ def import_file(
     if dry_run:
         return counts
 
-    target_name = f"{base}-imported.csv"
+    # -partial: not every row of the bank CSV reached Firefly (normalizer or import)
+    target_name = f"{base}-imported{'-partial' if normalized_partial else ''}.csv"
     if failed:
         failed_path = os.path.join(FAILED_DIR, f"{base}-import-failed.csv")
         with open(failed_path, "w", encoding="utf-8", newline="") as f:

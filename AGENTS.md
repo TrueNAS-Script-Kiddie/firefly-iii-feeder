@@ -19,7 +19,7 @@ Runs unattended from a TrueNAS cron job.
 | [engine/process_csv.py](engine/process_csv.py) | Normalizer entry point; orchestrates all stages. `main()` + `NORMALIZED_FIELDNAMES` |
 | [engine/core/](engine/core/) | Shared pipeline modules: `csv_runtime`, `csv_validation`, `duplicate_index`, `completion`, `runtime` |
 | [engine/banks/](engine/banks/) | One sub-package per bank. Each must export `normalize_row()` |
-| [engine/banks/fintro/](engine/banks/fintro/) | Reference bank: `normalize_row`, `extract_details`, `parsers`, `reconcile` |
+| [engine/banks/fintro/](engine/banks/fintro/) | Reference bank: `normalize_row`, `extract_details`, `parsers`, `reconcile`; `debug_row` shows how a row is parsed |
 | [engine/firefly/](engine/firefly/) | Firefly III import: `api` (REST client), `import_normalized` (importer) |
 | [deploy/](deploy/) | Source of root-side helper scripts; installed by hand on each server, never run from here (see "Root helper") |
 | [config/](config/) | `<bank>.yaml` configs (bank name is the filename) + `app.env` (`FIREFLY_URL`, `FIREFLY_TOKEN`) |
@@ -27,7 +27,7 @@ Runs unattended from a TrueNAS cron job.
 | `bank-csv-originals/` | Backup of every unique bank export; source for regenerating `data/` |
 | `data/incoming/` | Drop CSVs here to trigger processing |
 | `data/normalized/` | Normalized output waiting for import (timestamped) |
-| `data/imported/` | Normalized files after import: `<ts>-<name>-imported.csv` (`-imported-partial` if rows failed) |
+| `data/imported/` | Normalized files after import: `<ts>-<name>-imported.csv` (`-imported-partial` if any row of the bank CSV failed, in the normalizer or the import) |
 | `data/processed/` | Originals after processing (success / partial / failed) |
 | `data/failed/` | Rows that failed normalization, dedup, or import; whole files bash moved after a crash |
 | `data/duplicate-index/` | Per-account persistent dedup index (successfully normalized rows only) + backups rotated per account |
@@ -49,6 +49,10 @@ SFTP watcher excludes that file, so a local copy is never uploaded over it.
 # Normalizer only (debugging)
 PYTHONPATH=. python3 -m engine.process_csv <csv_path> <YYYYMMDD-HHMMSS> <logfile_path>
 
+# Debug failing rows: every parser step, the values found, and the exact failure.
+# <line> = "source row" in the normalizer log <ts>-<name>.log (reads only)
+PYTHONPATH=. python3 -m engine.banks.fintro.debug_row <csv> <line> [<line> ...]
+
 # Importer only; --dry-run builds every request but sends and moves nothing
 PYTHONPATH=. python3 -m engine.firefly.import_normalized [--dry-run] [--show N] [csv ...]
 ```
@@ -64,7 +68,8 @@ ruff check .
 Config: [ruff.toml](ruff.toml) — line-length 120, py310 target, selects `E,F,W,I,UP,B`.
 
 No test suite. Verify the normalizer by placing a sample CSV in `data/incoming/`
-and inspecting `data/normalized/`, `data/failed/`, and `data/logs/`; verify
+and inspecting `data/normalized/`, `data/failed/`, and `data/logs/` (failure
+reasons are in the normalizer log, not the `-import.log`); verify
 the importer with `--dry-run` on the server (the token lives there).
 
 ## Exit Codes
