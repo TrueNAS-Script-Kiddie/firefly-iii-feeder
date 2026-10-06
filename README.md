@@ -34,7 +34,7 @@ bank-csv-normalizer/
 │   ├── fintro.yaml                # Per-bank config (columns, regex, dedup)
 │   └── app.env                    # FIREFLY_URL, FIREFLY_TOKEN (server only)
 ├── bank-csv-originals/            # Backup of every unique bank export
-├── deploy/                        # Root helper script (installed by hand, see CLAUDE.md)
+├── deploy/                        # Root helper script (installed by hand, see AGENTS.md)
 ├── data/
 │   ├── incoming/ normalized/ imported/ processed/ failed/
 │   ├── duplicate-index/           # Per-account index + rotated backups
@@ -66,7 +66,7 @@ bank-csv-normalizer/
    to Firefly III, one API call per transaction, and moves each
    file to `data/imported/`. Failed rows go to `data/failed/`. Firefly being
    down or refusing the token blocks the import (one alert per outage) and
-   leaves the files for the next run. See `CLAUDE.md` → "Firefly III Import"
+   leaves the files for the next run. See `AGENTS.md` → "Firefly III Import"
    for the mapping rules and gotchas.
 
 ## Requirements
@@ -77,7 +77,7 @@ bank-csv-normalizer/
 - Firefly III ≥ 6.7.0 with "batch processing" enabled in its admin configuration
 - A Firefly III Personal Access Token in `config/app.env`
 - For history imports: the root helper in `deploy/` and a sudo rule for it (see
-  `CLAUDE.md` → "Root helper")
+  `AGENTS.md` → "Root helper")
 
 ## Running
 
