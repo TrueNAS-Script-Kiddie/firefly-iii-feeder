@@ -273,7 +273,7 @@ def extract_details(
         r" [0-9]{4}\s[0-9]{2}XX\sXXXX\s(?:[0-9]{4}|X[0-9]{3}\s[0-9]))"
         # group 1: details_transaction_type (part 2)
         r"(?:( BANCONTACT PAYCONIQ)(?: CO)?)?"  # group 2: details_transaction_type (part 1 primary)
-        r"(.*)"  # group 3: details_opposing_account_name
+        r"(.*?)"  # group 3: details_opposing_account_name (lazy, or it swallows P2P MOBILE)
         r"( P2P MOBILE)?"  # group 4: details_transaction_type (part 1 primary)
         r"( [0-9]{2}/[0-9]{2}/[0-9]{4})"  # group 5: details_payment_date (date)
         r"( OM)?"  # group 6: drop

@@ -162,7 +162,8 @@ def reconcile_transaction_types(
         ):
             # The details say which account management: the transfer after closing the account
             column_transaction_type = ""
-        elif details_transaction_type.startswith("6703 04XX XXXX"):
+        elif re.match(r"\d{4} \d{2}XX XXXX", details_transaction_type):
+            # Old transactions: the details hold only the card number
             if column_transaction_type == "Kaartbetaling":
                 details_transaction_type = "Betaling met debetkaart " + details_transaction_type
                 column_transaction_type = ""

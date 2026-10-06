@@ -101,6 +101,8 @@ REPLACE_IN_DETAILS_TRANSACTION_TYPE = [
     ("NA AFSLUITING REKENING", "na afsluiting rekening"),
     ("OVERSCHRIJVING", "Overschrijving"),
     ("TERUGBETALING MET DEBETKAART", "Terugbetaling met debetkaart"),
+    ("BANCONTACT P2P MOBILE Betaling", "Bancontact P2P mobile betaling"),
+    ("P2P MOBILE Betaling", "P2P mobile betaling"),
     ("BANCONTACT Betaling", "Bancontact betaling"),
     ("BANCONTACT Terugbetaling", "Bancontact terugbetaling"),
     ("BANCONTACT Geldopneming", "Bancontact geldopneming"),
