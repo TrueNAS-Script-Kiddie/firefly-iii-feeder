@@ -34,11 +34,12 @@ NORMALIZED_FIELDNAMES = [
     "opposing_account_bic",  # 10
     "opposing_account_number",  # 11: counterparty account without an IBAN
     "opposing_account_name",  # 12
-    "description",  # 13
-    "notes",  # 14
-    "unmapped_exchange_and_transaction_costs",  # 15
-    "unmapped_transaction_type",  # 16
-    "unmapped_reference_parts",  # 17
+    "is_cash_withdrawal",  # 13: "1" for cash withdrawals, else empty
+    "description",  # 14
+    "notes",  # 15
+    "unmapped_exchange_and_transaction_costs",  # 16
+    "unmapped_transaction_type",  # 17
+    "unmapped_reference_parts",  # 18
 ]
 
 

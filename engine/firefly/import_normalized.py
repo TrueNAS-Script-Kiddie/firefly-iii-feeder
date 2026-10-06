@@ -159,8 +159,7 @@ def build_split(
     # Without a counterparty Firefly books on its Cash account: right for cash withdrawals only
     opposing_name = row.get("opposing_account_name", "")
     if not opposing_name and not opposing_iban and not opposing_number:
-        is_cash_withdrawal = outgoing and "geldopn" in row.get("unmapped_transaction_type", "").lower()
-        opposing_name = "" if is_cash_withdrawal else UNKNOWN_COUNTERPARTY
+        opposing_name = "" if row.get("is_cash_withdrawal") == "1" else UNKNOWN_COUNTERPARTY
 
     # Firefly requires a description; fall back to what identifies the transaction best
     notes = row.get("notes", "")

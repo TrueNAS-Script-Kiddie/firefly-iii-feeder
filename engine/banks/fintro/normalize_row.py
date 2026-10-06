@@ -209,11 +209,12 @@ def normalize_row(csv_row: dict[str, str]) -> dict[str, Any]:
         "opposing_account_bic": "",  # 10
         "opposing_account_number": "",  # 11
         "opposing_account_name": "",  # 12
-        "description": "",  # 13
-        "notes": "",  # 14
-        "unmapped_exchange_and_transaction_costs": "",  # 15
-        "unmapped_transaction_type": "",  # 16
-        "unmapped_reference_parts": "",  # 17
+        "is_cash_withdrawal": "",  # 13
+        "description": "",  # 14
+        "notes": "",  # 15
+        "unmapped_exchange_and_transaction_costs": "",  # 16
+        "unmapped_transaction_type": "",  # 17
+        "unmapped_reference_parts": "",  # 18
     }
 
     # column_external_id -> external_id
@@ -376,5 +377,10 @@ def normalize_row(csv_row: dict[str, str]) -> dict[str, Any]:
     normalized["notes"] = "\n".join(notes_parts)
     normalized["unmapped_transaction_type"] = details_transaction_type or column_transaction_type
     normalized["unmapped_reference_parts"] = " ".join(reference_parts)
+
+    # Cash withdrawal (money out) -> is_cash_withdrawal: the importer books it on Firefly's Cash account.
+    # The wording is Fintro's, so this is where it belongs, not in the importer.
+    if normalized["amount"].startswith("-") and "geldopn" in normalized["unmapped_transaction_type"].lower():
+        normalized["is_cash_withdrawal"] = "1"
 
     return normalized

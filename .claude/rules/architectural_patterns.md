@@ -119,7 +119,7 @@ written yet.
 stage; only cross-source decisions, cosmetic replacement (via the
 `REPLACE_IN_*` tables in `normalize_row.py`), card-number masking and
 exchange-cost formatting (two small regexes), and final
-assembly of the 17 `NORMALIZED_FIELDNAMES` defined in
+assembly of the 18 `NORMALIZED_FIELDNAMES` defined in
 [engine/process_csv.py](../../engine/process_csv.py).
 
 ## 7. Stateful In-Memory + Persistent Dedup Index
@@ -248,7 +248,7 @@ one `POST /api/v1/transactions`.
   `batch/finish` is not an outage (own long timeout, no block flag).
 - **Dry run** — `--dry-run` runs the same decisions (including simulated
   transfer claims) without sending or moving anything.
-- **Known bank coupling** — cash withdrawals are recognised by the Fintro
-  wording `geldopn` in `unmapped_transaction_type` (`build_split`); other banks'
-  cash withdrawals would get `(onbekend)`. When adding a second bank, let the
-  bank module mark cash withdrawals and have the importer read that mark.
+- **Cash withdrawals** — the bank module marks them with `is_cash_withdrawal`
+  (`1`); the importer books a marked row without counterparty on Firefly's Cash
+  account (`build_split`). A new bank only has to set the same mark; unmarked
+  rows without counterparty get `(onbekend)`.
