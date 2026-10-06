@@ -62,6 +62,8 @@ REPLACE_IN_DETAILS_EXCHANGE_AND_TRANSACTION_COSTS = [
 
 REPLACE_IN_DETAILS_TRANSACTION_TYPE = [
     ("  ", " "),
+    ("ANNULERING BETALING MET DEBETKAART NUMMER", "Annulering betaling met debetkaart"),
+    ("ANNULERING BETALING MET KAART", "Annulering betaling met debetkaart"),
     ("BETALING MET BANKKAART MET KAART", "Betaling met debetkaart"),
     ("BETALING MET DEBET KAART NUMMER", "Betaling met debetkaart"),
     ("BETALING MET DEBETKAART NUMMER", "Betaling met debetkaart"),
@@ -245,6 +247,9 @@ def normalize_row(csv_row: dict[str, str]) -> dict[str, Any]:
     normalized["opposing_account_name"] = merge_opposing_account_name(
         column_opposing_account_name, details["opposing_account_name"]
     )
+    # A place without a shop (card cancellation) follows the name: "ACME PAYMENTS BREDA"
+    if details["place"]:
+        normalized["opposing_account_name"] = f"{normalized['opposing_account_name']} {details['place']}".strip()
     if (
         not normalized["opposing_account_name"]
         and not normalized["opposing_account_iban"]

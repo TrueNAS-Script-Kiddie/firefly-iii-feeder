@@ -63,6 +63,7 @@ def extract_details(
     details_no_description = False
 
     details_dom_date = ""
+    details_place = ""
     details_match_type = ""
 
     # VALUTADATUM -> details_booking_date
@@ -299,6 +300,32 @@ def extract_details(
         remaining_details = remaining_details.replace(match.group(0), "").strip()
         record_step(trace, "BETALING", match.group(0), remaining_details)
 
+    # ANNULERING BETALING -> details_transaction_type, details_payment_date, details_place,
+    # details_exchange_and_transaction_costs
+    # Own block: the date comes before the card, and only the place is given, not the shop (the
+    # counterparty in the columns is the card processor).
+    RE_ANNULERING_BETALING = re.compile(
+        r"^"
+        r"(ANNULERING BETALING)"  # group 1: details_transaction_type (part 1)
+        r"( VAN)"  # group 2: drop
+        r"( [0-9]{2}/[0-9]{2}/[0-9]{4})"  # group 3: details_payment_date
+        r"( MET (?:DEBETKAART NUMMER|KAART) [0-9]{4}\s[0-9]{2}XX\sXXXX\s(?:[0-9]{4}|X[0-9]{3}\s[0-9]))"
+        # group 4: details_transaction_type (part 2)
+        r" (.+?)"  # group 5: details_place
+        r"( [A-Z]{3} [0-9.]+,[0-9]{2})"  # group 6: details_exchange_and_transaction_costs (amount)
+        r"$",
+        re.IGNORECASE,
+    )
+    match = RE_ANNULERING_BETALING.search(remaining_details)
+    if match:
+        details_match_type = "Annulering betaling"
+        details_transaction_type = (match.group(1) + match.group(4)).strip()
+        details_payment_date = parse_ddmmyyyy(match.group(3).strip())
+        details_place = match.group(5).strip()
+        details_exchange_and_transaction_costs = match.group(6).strip()
+        remaining_details = remaining_details.replace(match.group(0), "").strip()
+        record_step(trace, "ANNULERING BETALING", match.group(0), remaining_details)
+
     # MOBIELE BETALING -> details_transaction_type, details_opposing_account_iban, details_opposing_account_bic,
     # details_opposing_account_name
     RE_MOBIELE_BETALING = re.compile(
@@ -391,4 +418,5 @@ def extract_details(
         "exchange_and_transaction_costs": details_exchange_and_transaction_costs,
         "no_description": details_no_description,
         "dom_date": details_dom_date,
+        "place": details_place,
     }

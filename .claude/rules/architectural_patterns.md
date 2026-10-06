@@ -109,7 +109,8 @@ written yet.
   2. The remainder is matched by leading pattern anchored with `^` to
      identify transaction type and extract the rest (STORTING, DOORLOPENDE
      OPDRACHT, DOMICILIERING, BUITENLANDSE OVERSCHRIJVING, OVERSCHRIJVING,
-     BETALING, MOBIELE BETALING, GELDOPNEMING, old-card fallback).
+     BETALING, ANNULERING BETALING, MOBIELE BETALING, GELDOPNEMING, old-card
+     fallback).
 
   Each matched segment is removed from `remaining_details`. Anything left at
   the end raises `ValueError`, unless that leftover text also occurs inside the

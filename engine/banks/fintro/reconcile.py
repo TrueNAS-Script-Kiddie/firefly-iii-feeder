@@ -98,6 +98,7 @@ def reconcile_transaction_types(
         elif column_transaction_type_norm == "CORRECTIEKAARTVERRICHTING" and (
             details_transaction_type_norm.startswith("STORTINGOPDEREKENINGGEKOPPELDAANDEDEBETKAART")
             or "TERUGBETALINGMETDEBETKAART" in details_transaction_type_norm
+            or details_transaction_type_norm.startswith("ANNULERINGBETALING")
         ):
             details_transaction_type = "(Correctie) " + details_transaction_type
             column_transaction_type = ""
