@@ -157,6 +157,9 @@ def reconcile_transaction_types(
         ):
             column_transaction_type = "Dringende buitenlandse overschrijving"
             details_transaction_type = ""
+        elif column_transaction_type_norm == "DIVERSECORRECTIES" and details_transaction_type_norm == "VERBETERING":
+            # Same meaning: the column already says it is a correction
+            details_transaction_type = ""
         elif (
             column_transaction_type_norm == "REKENINGBEHEER" and "NAAFSLUITINGREKENING" in details_transaction_type_norm
         ):

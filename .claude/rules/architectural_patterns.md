@@ -107,14 +107,13 @@ written yet.
   1. Easy-to-detect postfixes anchored with `$` are stripped first
      (VALUTADATUM, BANKREFERENTIE, UITGEVOERD OP).
   2. The remainder is matched by leading pattern anchored with `^` to
-     identify transaction type and extract the rest (STORTING, DOORLOPENDE
+     identify transaction type and extract the rest (VERBETERING, STORTING, DOORLOPENDE
      OPDRACHT, DOMICILIERING, BUITENLANDSE OVERSCHRIJVING, OVERSCHRIJVING,
      BETALING, ANNULERING BETALING, MOBIELE BETALING, GELDOPNEMING, old-card
      fallback).
 
   Each matched segment is removed from `remaining_details`. Anything left at
-  the end raises `ValueError`, unless that leftover text also occurs inside the
-  extracted description (a known gap in the check).
+  the end raises `ValueError`.
 
 **Phase 2 — Reconcile, reformat, assemble.** No parsing of `details` at this
 stage; only cross-source decisions, cosmetic replacement (via the

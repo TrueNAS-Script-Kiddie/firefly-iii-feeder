@@ -142,6 +142,16 @@ def extract_details(
         remaining_details = remaining_details.replace(match.group(0), "").strip()
         record_step(trace, "ZONDER MEDEDELING", match.group(0), remaining_details)
 
+    # VERBETERING -> details_transaction_type
+    # A correction by the bank: "VERBETERING MEDEDELING : VERBETERING DUBBELE BOEKING ..."
+    RE_VERBETERING = re.compile(r"^(VERBETERING)$")  # group 1: details_transaction_type
+    match = RE_VERBETERING.search(remaining_details)
+    if match:
+        details_match_type = "Verbetering"
+        details_transaction_type = match.group(1)
+        remaining_details = ""
+        record_step(trace, "VERBETERING", match.group(0), remaining_details)
+
     # STORTING -> details_opposing_account_name, details_payment_date, details_transaction_type
     RE_STORTING = re.compile(
         r"^(STORTING)"  # group 1: details_transaction_type
@@ -396,7 +406,7 @@ def extract_details(
             remaining_details = ""
 
     # Remaining details
-    if remaining_details and remaining_details not in details_description:
+    if remaining_details:
         if details_match_type:
             raise ValueError(
                 f"Regex match ({details_match_type}), but remaining_details should be empty instead of '{remaining_details}'"  # noqa: E501
