@@ -137,6 +137,17 @@ def reconcile_transaction_types(
         elif column_transaction_type_norm == "AFLOSSINGKREDIET" and details_transaction_type_norm == "OVERSCHRIJVING":
             details_transaction_type = "Overschrijving voor aflossing krediet"
             column_transaction_type = ""
+        elif (
+            column_transaction_type_norm == "GRENSOVERSCHRIJDENDEOVERSCHRIJVING"
+            and details_transaction_type_norm == "OVERSCHRIJVINGBUITENLAND"
+        ):
+            details_transaction_type = ""
+        elif (
+            column_transaction_type_norm == "DRINGENDEOVERSCHRIJVING"
+            and details_transaction_type_norm == "DRINGENDEBUITENLANDSEBETALING"
+        ):
+            column_transaction_type = "Dringende grensoverschrijdende overschrijving"
+            details_transaction_type = ""
         elif details_transaction_type.startswith("6703 04XX XXXX"):
             if column_transaction_type == "Kaartbetaling":
                 details_transaction_type = "Betaling met debetkaart " + details_transaction_type

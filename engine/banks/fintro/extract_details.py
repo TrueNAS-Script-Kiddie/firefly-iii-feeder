@@ -202,6 +202,20 @@ def extract_details(
         remaining_details = remaining_details.replace(match.group(0), "").strip()
         record_step(trace, "DOMICILIERING", match.group(0), remaining_details)
 
+    # BUITENLANDSE OVERSCHRIJVING -> details_transaction_type
+    # Only a type: name, IBAN and message are in the columns. Before OVERSCHRIJVING, which would take
+    # "BUITENLAND" for the name.
+    RE_BUITENLANDSE_OVERSCHRIJVING = re.compile(
+        r"^(OVERSCHRIJVING BUITENLAND|DRINGENDE BUITENLANDSE BETALING)$",  # group 1: details_transaction_type
+        re.IGNORECASE,
+    )
+    match = RE_BUITENLANDSE_OVERSCHRIJVING.search(remaining_details)
+    if match:
+        details_match_type = "Buitenlandse overschrijving"
+        details_transaction_type = match.group(1)
+        remaining_details = ""
+        record_step(trace, "BUITENLANDSE OVERSCHRIJVING", match.group(0), remaining_details)
+
     # OVERSCHRIJVING -> details_transaction_type, details_technical_reference, details_opposing_account_iban,
     # details_opposing_account_bic, details_opposing_account_name
     RE_OVERSCHRIJVING = re.compile(
