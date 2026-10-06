@@ -165,6 +165,14 @@ def normalize_row(csv_row: dict[str, str]) -> dict[str, Any]:
     column_account_currency_code = csv_row["account_currency_code"]
     column_asset_account_iban = csv_row["asset_account_iban"]
     raw_opposing_account_iban = csv_row.get("opposing_account_iban", "").strip()
+    column_opposing_account_number = ""
+    # Foreign account numbers without an IBAN (123456789012) are kept as a plain number; anything
+    # IBAN-shaped must be a valid IBAN, so a broken one is not passed off as a number
+    if re.fullmatch(r"[0-9A-Z]+", raw_opposing_account_iban, re.IGNORECASE) and not re.match(
+        r"[A-Z]{2}[0-9]{2}", raw_opposing_account_iban, re.IGNORECASE
+    ):
+        column_opposing_account_number = raw_opposing_account_iban.upper()
+        raw_opposing_account_iban = ""
     column_opposing_account_iban = parse_iban(
         raw_opposing_account_iban, error_message=f"Invalid IBAN in tegenpartij column: '{raw_opposing_account_iban}'"
     )
@@ -197,12 +205,13 @@ def normalize_row(csv_row: dict[str, str]) -> dict[str, Any]:
         "asset_account_iban": "",  # 8
         "opposing_account_iban": "",  # 9
         "opposing_account_bic": "",  # 10
-        "opposing_account_name": "",  # 11
-        "description": "",  # 12
-        "notes": "",  # 13
-        "unmapped_exchange_and_transaction_costs": "",  # 14
-        "unmapped_transaction_type": "",  # 15
-        "unmapped_reference_parts": "",  # 16
+        "opposing_account_number": "",  # 11
+        "opposing_account_name": "",  # 12
+        "description": "",  # 13
+        "notes": "",  # 14
+        "unmapped_exchange_and_transaction_costs": "",  # 15
+        "unmapped_transaction_type": "",  # 16
+        "unmapped_reference_parts": "",  # 17
     }
 
     # column_external_id -> external_id
@@ -248,6 +257,9 @@ def normalize_row(csv_row: dict[str, str]) -> dict[str, Any]:
             f"details_opposing_account_iban='{details['opposing_account_iban']}'"
         )
     normalized["opposing_account_iban"] = column_opposing_account_iban or details["opposing_account_iban"]
+
+    # column_opposing_account_number -> opposing_account_number
+    normalized["opposing_account_number"] = column_opposing_account_number
 
     # details.opposing_account_bic -> opposing_account_bic
     normalized["opposing_account_bic"] = details["opposing_account_bic"]

@@ -32,12 +32,13 @@ NORMALIZED_FIELDNAMES = [
     "asset_account_iban",  # 8
     "opposing_account_iban",  # 9
     "opposing_account_bic",  # 10
-    "opposing_account_name",  # 11
-    "description",  # 12
-    "notes",  # 13
-    "unmapped_exchange_and_transaction_costs",  # 14
-    "unmapped_transaction_type",  # 15
-    "unmapped_reference_parts",  # 16
+    "opposing_account_number",  # 11: counterparty account without an IBAN
+    "opposing_account_name",  # 12
+    "description",  # 13
+    "notes",  # 14
+    "unmapped_exchange_and_transaction_costs",  # 15
+    "unmapped_transaction_type",  # 16
+    "unmapped_reference_parts",  # 17
 ]
 
 

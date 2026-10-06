@@ -130,6 +130,9 @@ Row → split mapping lives in `build_split()`:
 
 - Sign of `amount` decides withdrawal / deposit; `asset_account_iban` must match
   a Firefly asset account (looked up by IBAN every run).
+- A counterparty account without an IBAN (foreign account number) goes to
+  `opposing_account_number` → `source_number` / `destination_number`: Firefly
+  validates `*_iban` as an IBAN, `*_number` is free text.
 - Counterparty IBAN of an own asset account → **transfer**, deduplicated by
   "match or create": the first side creates it, the other side claims it
   (same accounts, same amount, ±7 days). Order and history coverage of the

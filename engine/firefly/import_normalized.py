@@ -151,12 +151,14 @@ def build_split(
         raise ValueError(f"No Firefly asset account with IBAN {own_iban}")
 
     opposing_iban = clean_iban(row.get("opposing_account_iban"))
+    # Absent in files normalized before the column existed
+    opposing_number = row.get("opposing_account_number") or ""
     opposing_asset = assets.get(opposing_iban) if opposing_iban and opposing_iban != own_iban else None
     outgoing = amount.startswith("-")
 
     # Without a counterparty Firefly books on its Cash account: right for cash withdrawals only
     opposing_name = row.get("opposing_account_name", "")
-    if not opposing_name and not opposing_iban:
+    if not opposing_name and not opposing_iban and not opposing_number:
         is_cash_withdrawal = outgoing and "geldopn" in row.get("unmapped_transaction_type", "").lower()
         opposing_name = "" if is_cash_withdrawal else UNKNOWN_COUNTERPARTY
 
@@ -188,6 +190,7 @@ def build_split(
             source_id=own["id"],
             destination_name=opposing_name,
             destination_iban=opposing_iban,
+            destination_number=opposing_number,
             destination_bic=row.get("opposing_account_bic", ""),
         )
         decision = "withdrawal"
@@ -197,6 +200,7 @@ def build_split(
             destination_id=own["id"],
             source_name=opposing_name,
             source_iban=opposing_iban,
+            source_number=opposing_number,
             source_bic=row.get("opposing_account_bic", ""),
         )
         decision = "deposit"
