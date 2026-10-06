@@ -34,6 +34,7 @@ bank-csv-normalizer/
 │   ├── fintro.yaml                # Per-bank config (columns, regex, dedup)
 │   └── app.env                    # FIREFLY_URL, FIREFLY_TOKEN (server only)
 ├── bank-csv-originals/            # Backup of every unique bank export
+├── deploy/                        # Root helper script (installed by hand, see CLAUDE.md)
 ├── data/
 │   ├── incoming/ normalized/ imported/ processed/ failed/
 │   ├── duplicate-index/           # Per-account index + rotated backups
@@ -62,7 +63,7 @@ bank-csv-normalizer/
    outcome code (`0`, `65`, `75`, `92–97`, `99`).
 5. After all incoming files, still under the lock, the importer
    (`engine.firefly.import_normalized`) sends every row in `data/normalized/`
-   to Firefly III, one API call per transaction (~0.5 s each), and moves each
+   to Firefly III, one API call per transaction, and moves each
    file to `data/imported/`. Failed rows go to `data/failed/`. Firefly being
    down or refusing the token blocks the import (one alert per outage) and
    leaves the files for the next run. See `CLAUDE.md` → "Firefly III Import"
@@ -73,7 +74,10 @@ bank-csv-normalizer/
 - Python 3.10+
 - `pyyaml` (all other runtime deps are stdlib)
 - Bash, `stat`, `tail`, `mv`, `flock`
+- Firefly III ≥ 6.7.0 with "batch processing" enabled in its admin configuration
 - A Firefly III Personal Access Token in `config/app.env`
+- For history imports: the root helper in `deploy/` and a sudo rule for it (see
+  `CLAUDE.md` → "Root helper")
 
 ## Running
 

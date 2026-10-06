@@ -1,7 +1,7 @@
 """
 Import normalized CSVs from data/normalized/ into Firefly III via its REST API.
 
-One POST per transaction. Per file:
+One POST per transaction; runs with many old rows use batch mode. Per file:
   - every row imported / already present -> file moved to data/imported/
   - some rows failed -> failed rows to data/failed/<ts>-<name>-import-failed.csv,
     file moved to data/imported/ as -imported-partial, alert on stderr
@@ -31,8 +31,9 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -45,6 +46,20 @@ IMPORTED_DIR = os.path.join(DATA_DIR, "imported")
 FAILED_DIR = os.path.join(DATA_DIR, "failed")
 LOG_DIR = os.path.join(DATA_DIR, "logs")
 BLOCKED_FLAG = os.path.join(DATA_DIR, "firefly-import-blocked.flag")
+# Set while batch-submitted transactions still need rules + running balances
+RECALCULATE_FLAG = os.path.join(DATA_DIR, "firefly-recalculate.flag")
+
+# Per row, Firefly recalculates every later balance of the account (~2 ms per later
+# transaction): recent rows cost ~0.3 s, old rows seconds each. Batch costs ~0.2 s
+# per row plus a fixed follow-up (~1 min), so it pays off from ~20 old rows.
+# The cutoff is relative to the day of the run.
+BATCH_OLD_ROW_AGE_DAYS = 183
+BATCH_OLD_ROWS_THRESHOLD = 20
+RECALCULATE_TIMEOUT_SECONDS = 3600
+# batch/finish applies rules to every pending transaction: minutes after a history import
+FINISH_TIMEOUT_SECONDS = 1800
+# Root-owned, next to this app's folder (source: deploy/); run via a sudo rule
+REFRESH_SCRIPT = os.path.join(os.path.dirname(BASE_DIR), "root-scripts", "firefly-refresh-running-balance.bash")
 
 EXIT_OK = 0
 EXIT_UNAVAILABLE = 69
@@ -197,6 +212,7 @@ def import_file(
     client: FireflyClient,
     assets: dict[str, dict[str, str]],
     pool: TransferPool,
+    batch: bool,
     dry_run: bool,
     show: int,
 ) -> collections.Counter:
@@ -243,6 +259,7 @@ def import_file(
         else:
             body = {
                 "error_if_duplicate_hash": True,
+                "batch_submission": batch,
                 "apply_rules": True,
                 "fire_webhooks": True,
                 "transactions": [split],
@@ -295,6 +312,61 @@ def import_file(
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+def count_old_rows(path: str, cutoff: str) -> int:
+    """Rows dated before cutoff (ISO, so string comparison is date comparison)."""
+    with open(path, encoding="utf-8", newline="") as f:
+        return sum(
+            1
+            for row in csv.DictReader(f, delimiter=";")
+            if RE_DATE.match(row.get("primary_transaction_date", "")) and row["primary_transaction_date"] < cutoff
+        )
+
+
+def finish_batch(client: FireflyClient) -> bool:
+    """
+    Apply rules to every batch-submitted transaction (including those of an
+    interrupted run). It does not recalculate running balances: Firefly's batch
+    event carries no accounts, hence recalculate_running_balances().
+    """
+    # Firefly compares apply_rules to the string "true"
+    try:
+        status, response = client.request("POST", "batch/finish?apply_rules=true", timeout=FINISH_TIMEOUT_SECONDS)
+    except FireflyUnavailableError as exc:
+        # Slow is not down: keep the follow-up pending instead of blocking imports
+        alert("FIREFLY BATCH FINISH FAILED", f"{exc}\n\nRules are pending; the next import run retries.")
+        return False
+    if status in (200, 204):
+        return True
+    alert(
+        f"FIREFLY BATCH FINISH FAILED: HTTP {status}",
+        f"{response}\n\nRules are pending; the next import run retries.",
+    )
+    return False
+
+
+def recalculate_running_balances() -> bool:
+    """
+    Run Firefly's own full recalculation through REFRESH_SCRIPT, which finds the
+    Firefly container itself. Needs, per server: the script installed root-owned,
+    and a TrueNAS sudo rule (no password) for it for the user running the cron job.
+    """
+    command = ["sudo", "-n", REFRESH_SCRIPT]
+    subject = "FIREFLY RUNNING BALANCES NOT RECALCULATED"
+    footer = f"\n\nRetried on the next import run while {RECALCULATE_FLAG} exists."
+    if not os.path.isfile(REFRESH_SCRIPT):
+        alert(subject, f"{REFRESH_SCRIPT} is not installed (source: deploy/).{footer}")
+        return False
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=RECALCULATE_TIMEOUT_SECONDS)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        alert(subject, f"{' '.join(command)}\n{exc}{footer}")
+        return False
+    if result.returncode != 0:
+        alert(subject, f"{' '.join(command)}\nexit {result.returncode}\n{result.stderr[-2000:]}{footer}")
+        return False
+    return True
+
+
 def set_blocked(reason: str) -> None:
     """Alert once per outage; the cron runs every minute."""
     if not os.path.exists(BLOCKED_FLAG):
@@ -311,7 +383,9 @@ def main() -> int:
     args = parser.parse_args()
 
     files = args.files or sorted(glob.glob(os.path.join(NORMALIZED_DIR, "*.csv")))
-    if not files:
+    # A pending batch follow-up is retried even when there is nothing new to import
+    follow_up_pending = not args.dry_run and os.path.exists(RECALCULATE_FLAG)
+    if not files and not follow_up_pending:
         return EXIT_OK
 
     if not args.dry_run:
@@ -321,15 +395,27 @@ def main() -> int:
     totals: collections.Counter = collections.Counter()
     try:
         client = FireflyClient(CONFIG.get("FIREFLY_URL", ""), CONFIG.get("FIREFLY_TOKEN", ""))
-        assets = load_asset_accounts(client)
-        pool = load_transfer_pool(client)
-        for path in files:
+        if files:
+            assets = load_asset_accounts(client)
+            pool = load_transfer_pool(client)
+            cutoff = (date.today() - timedelta(days=BATCH_OLD_ROW_AGE_DAYS)).isoformat()
+            old_rows = sum(count_old_rows(path, cutoff) for path in files)
+            batch = old_rows > BATCH_OLD_ROWS_THRESHOLD
             if args.dry_run:
-                print(f"== {os.path.basename(path)}")
-            counts = import_file(path, client, assets, pool, args.dry_run, args.show)
-            if args.dry_run:
-                print(f"  {dict(counts)}")
-            totals.update(counts)
+                print(f"== mode: {'batch' if batch else 'per row'} ({old_rows} rows before {cutoff})")
+            elif batch:
+                # Before the first batch row, so an interruption still triggers the follow-up
+                open(RECALCULATE_FLAG, "w", encoding="utf-8").close()
+            for path in files:
+                if args.dry_run:
+                    print(f"== {os.path.basename(path)}")
+                counts = import_file(path, client, assets, pool, batch, args.dry_run, args.show)
+                if args.dry_run:
+                    print(f"  {dict(counts)}")
+                totals.update(counts)
+        if not args.dry_run and os.path.exists(RECALCULATE_FLAG):
+            if finish_batch(client) and recalculate_running_balances():
+                os.remove(RECALCULATE_FLAG)
     except (FireflyAuthError, FireflyUnavailableError) as exc:
         if args.dry_run:
             print(f"BLOCKED: {exc}", file=sys.stderr)

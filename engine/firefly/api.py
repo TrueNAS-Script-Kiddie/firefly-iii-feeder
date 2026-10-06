@@ -29,7 +29,9 @@ class FireflyClient:
         self.base_url = base_url.rstrip("/")
         self.token = token
 
-    def request(self, method: str, path: str, body: dict[str, Any] | None = None) -> tuple[int, dict[str, Any]]:
+    def request(
+        self, method: str, path: str, body: dict[str, Any] | None = None, timeout: int = TIMEOUT_SECONDS
+    ) -> tuple[int, dict[str, Any]]:
         """Return (status, json_body). 4xx other than auth are returned, not raised."""
         data = json.dumps(body).encode("utf-8") if body is not None else None
         req = urllib.request.Request(
@@ -43,7 +45,7 @@ class FireflyClient:
             },
         )
         try:
-            with urllib.request.urlopen(req, timeout=TIMEOUT_SECONDS) as resp:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
                 status, raw = resp.status, resp.read()
         except urllib.error.HTTPError as exc:
             status, raw = exc.code, exc.read()

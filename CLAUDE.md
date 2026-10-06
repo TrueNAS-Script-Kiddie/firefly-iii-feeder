@@ -21,6 +21,7 @@ Runs unattended from a TrueNAS cron job.
 | [engine/banks/](engine/banks/) | One sub-package per bank. Each must export `normalize_row()` |
 | [engine/banks/fintro/](engine/banks/fintro/) | Reference bank: `normalize_row`, `extract_details`, `parsers`, `reconcile` |
 | [engine/firefly/](engine/firefly/) | Firefly III import: `api` (REST client), `import_normalized` (importer) |
+| [deploy/](deploy/) | Source of root-side helper scripts; installed by hand on each server, never run from here (see "Root helper") |
 | [config/](config/) | `<bank>.yaml` configs (bank name is the filename) + `app.env` (`FIREFLY_URL`, `FIREFLY_TOKEN`) |
 | [bank-csv-normalizer.bash](bank-csv-normalizer.bash) | Cron entry; `flock`, upload check (ctime ≥ 30 s + complete last line), normalizes each incoming CSV, then runs the importer |
 | `bank-csv-originals/` | Backup of every unique bank export; source for regenerating `data/` |
@@ -82,13 +83,27 @@ Normalizer — [engine/process_csv.py](engine/process_csv.py) and
 Importer — [engine/firefly/import_normalized.py](engine/firefly/import_normalized.py):
 `0` all imported, `75` some rows failed, `69` Firefly unreachable or token refused
 (files stay in `data/normalized/`; alerted once per outage via
-`data/firefly-import-blocked.flag`).
+`data/firefly-import-blocked.flag`). `data/firefly-recalculate.flag` marks a batch
+follow-up that is still pending (see below).
 
 ## Firefly III Import
 
-One `POST /api/v1/transactions` per row (~0.5 s each), with
-`error_if_duplicate_hash`, so re-importing a file is safe. Row → split mapping
-lives in `build_split()`:
+One `POST /api/v1/transactions` per row, with `error_if_duplicate_hash`, so
+re-importing a file is safe. Two modes, chosen per run (`BATCH_OLD_ROW_AGE_DAYS`,
+`BATCH_OLD_ROWS_THRESHOLD`; the age cutoff is relative to the day of the run):
+
+- **Per row** (default; ~0.3 s per recent row): Firefly applies rules and
+  recalculates running balances immediately. Cost grows with the age of the
+  row, because every later balance of the account is recalculated (~3 s for a
+  2015 row).
+- **Batch** (more than 20 rows older than 6 months, i.e. history imports;
+  ~0.2 s per row): rows are submitted with `batch_submission`. At the end of the
+  run `batch/finish` applies the rules and the root helper recalculates all
+  running balances (~1 min at 14,500 transactions).
+  `data/firefly-recalculate.flag` stays until both succeeded, so an interrupted
+  or failed follow-up is retried by the next run, even without new files.
+
+Row → split mapping lives in `build_split()`:
 
 - Sign of `amount` decides withdrawal / deposit; `asset_account_iban` must match
   a Firefly asset account (looked up by IBAN every run).
@@ -104,11 +119,46 @@ lives in `build_split()`:
 
 Gotchas:
 
+- **Firefly ≥ 6.7.0 is required.** Before it (issue #12710) the duplicate hash
+  included the batch flag, so a row imported per row and again in batch mode
+  was stored twice.
+- **`enable_batch_processing` must be on** (Firefly admin configuration, set it
+  in the GUI: the configuration API stores it as text, which Firefly ignores).
+  While it is off, batch mode silently does the full per-row work.
 - Firefly's duplicate check includes **deleted** transactions. After deleting
   transactions, also `DELETE /api/v1/data/purge`, or a re-import silently
   counts them as "already present".
+- `DELETE /api/v1/data/destroy` of many objects answers 504 after about a
+  minute and stops partway: repeat it until 204, then purge. Destroying
+  transactions does not delete the expense/revenue accounts they created
+  (`objects=expense_accounts` / `revenue_accounts`).
 - Dates must be ISO; Firefly parses `dd/mm/yyyy` as US month/day without error.
 - Personal Access Tokens expire after at most one year → "FIREFLY IMPORT BLOCKED" alert.
+
+## Root helper (running balances)
+
+Firefly has no API to recalculate running balances, only
+`php artisan firefly-iii:refresh-running-balance --force` inside its container,
+and `docker exec` needs root. So the cron user may run exactly one script as
+root, through a passwordless sudo rule:
+
+- Source: [deploy/firefly-refresh-running-balance.bash](deploy/firefly-refresh-running-balance.bash).
+  It takes no arguments and finds the container by name (exactly one running
+  `firefly` container that is not importer/cron/database/redis), so it works on
+  every server.
+- Install per server, root-owned in a folder the cron user cannot write:
+
+  ```bash
+  install -d -o root -g root -m 755 <app-ds>/root-scripts
+  install -o root -g root -m 755 <app-ds>/bank-csv-normalizer/deploy/firefly-refresh-running-balance.bash <app-ds>/root-scripts/
+  ```
+
+- Sudo rule: TrueNAS GUI → Credentials → Users → the cron user → "Allowed sudo
+  commands with no password" (stored in the config database, so it survives
+  updates): the full path of the installed script, no wildcards (a wildcard
+  would give root in any container).
+- The importer runs it as `sudo -n <script>` (`REFRESH_SCRIPT`). Missing script,
+  rule or container gives an alert, and the flag keeps the follow-up pending.
 
 ## Adding a New Bank
 

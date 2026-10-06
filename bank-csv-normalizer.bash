@@ -18,12 +18,14 @@ LOG_DIR="${BASE_DIR}/data/logs"
 PYTHON_MODULE="engine.process_csv"
 
 LOCKFILE_PATH="${BASE_DIR}/.process.lock"
+# Set by the importer while a batch import still needs Firefly's follow-up
+RECALCULATE_FLAG="${BASE_DIR}/data/firefly-recalculate.flag"
 UPLOAD_SETTLE_SECONDS=30
 INCOMPLETE_LINE_GRACE_SECONDS=600
 
-# Nothing to normalize or import → done
+# Nothing to normalize, import or follow up → done
 PENDING=("${IN_DIR}"/*.csv "${NORMALIZED_DIR}"/*.csv)
-((${#PENDING[@]})) || exit 0
+((${#PENDING[@]})) || [[ -e "${RECALCULATE_FLAG}" ]] || exit 0
 
 # data/ is not in git: a fresh deploy has no log folder, and logging would fail
 mkdir -p "${LOG_DIR}" "${FAILED_DIR}" || exit 1
@@ -92,6 +94,6 @@ done
 # so a long import never overlaps the next cron run. The importer alerts on
 # stderr itself.
 NORMALIZED=("${NORMALIZED_DIR}"/*.csv)
-if ((${#NORMALIZED[@]})); then
+if ((${#NORMALIZED[@]})) || [[ -e "${RECALCULATE_FLAG}" ]]; then
 	python3 -m engine.firefly.import_normalized
 fi

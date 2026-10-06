@@ -195,7 +195,7 @@ and consumed by `build_paths` in [engine/core/csv_runtime.py](../../engine/core/
   `cp -p` keep an old mtime, but every write bumps ctime) and its last byte is a
   newline; after 10 min process anyway so a broken file gets reported.
 - **Idle runs** exit before the lock when `incoming/` and `normalized/` hold no
-  CSV: builtins only, no Python.
+  CSV and no `firefly-recalculate.flag` is pending: builtins only, no Python.
 - Exit codes `0/65/75/99` are "Python handled it"; anything else triggers a
   fallback move of the incoming file to `data/failed/`.
 - Runs every minute; alerts go to stderr, which the TrueNAS cron job emails.
@@ -217,7 +217,8 @@ runs after the normalizer loop and turns every row in `data/normalized/` into
 one `POST /api/v1/transactions`.
 
 - **Idempotent** — `error_if_duplicate_hash` makes a re-import of the same
-  row "already present". Firefly's check includes deleted transactions:
+  row "already present" (needs Firefly ≥ 6.7.0: older versions hashed the batch
+  flag, so the same row in per-row and batch mode was stored twice). Firefly's check includes deleted transactions:
   purge (`DELETE /api/v1/data/purge`) after deleting, before re-importing.
 - **Firefly state read per run** — asset accounts by IBAN, existing transfers
   for matching. Nothing about Firefly is configured in this repo.
@@ -231,6 +232,16 @@ one `POST /api/v1/transactions`.
   `data/firefly-import-blocked.flag`; any other rejection fails only that row
   (to `data/failed/<ts>-<name>-import-failed.csv`) and the file moves to
   `data/imported/` as `<ts>-<name>-imported-partial.csv`.
+- **Mode per run** — per row for recent data, batch (`batch_submission`) when
+  more than `BATCH_OLD_ROWS_THRESHOLD` rows are older than
+  `BATCH_OLD_ROW_AGE_DAYS`, relative to the day of the run. Per row, Firefly
+  recalculates every later balance of the account, so old rows cost seconds each;
+  batch costs a fixed follow-up instead (rules via `batch/finish`, balances via
+  the root helper `deploy/firefly-refresh-running-balance.bash` through a sudo
+  rule: Firefly has no API for it). `firefly-recalculate.flag` is set before the
+  first batch row and removed only after the follow-up succeeded; a failure
+  alerts and the next run retries, also when there are no new files. A slow
+  `batch/finish` is not an outage (own long timeout, no block flag).
 - **Dry run** — `--dry-run` runs the same decisions (including simulated
   transfer claims) without sending or moving anything.
 - **Known bank coupling** — cash withdrawals are recognised by the Fintro
