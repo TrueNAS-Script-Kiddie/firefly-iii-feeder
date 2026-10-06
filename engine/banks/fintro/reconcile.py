@@ -157,6 +157,11 @@ def reconcile_transaction_types(
         ):
             column_transaction_type = "Dringende buitenlandse overschrijving"
             details_transaction_type = ""
+        elif (
+            column_transaction_type_norm == "REKENINGBEHEER" and "NAAFSLUITINGREKENING" in details_transaction_type_norm
+        ):
+            # The details say which account management: the transfer after closing the account
+            column_transaction_type = ""
         elif details_transaction_type.startswith("6703 04XX XXXX"):
             if column_transaction_type == "Kaartbetaling":
                 details_transaction_type = "Betaling met debetkaart " + details_transaction_type
