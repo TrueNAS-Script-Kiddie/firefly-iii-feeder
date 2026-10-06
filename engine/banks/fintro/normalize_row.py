@@ -68,6 +68,14 @@ REPLACE_IN_DETAILS_TRANSACTION_TYPE = [
     ("BETALING MET DEBET KAART NUMMER", "Betaling met debetkaart"),
     ("BETALING MET DEBETKAART NUMMER", "Betaling met debetkaart"),
     ("GELDOPNEMING MET DEBETKAART NUMMER", "Geldopneming met debetkaart"),
+    (
+        "GELDOPNAME IN BUITENLAND AAN ANDERE AUTOMATEN MET KAART",
+        "Geldopneming in buitenland aan andere automaten met debetkaart",
+    ),
+    (
+        "GELDOPNEMING IN BUITENLAND AAN ANDERE AUTOMATEN MET DEBETKAART NUMMER",
+        "Geldopneming in buitenland aan andere automaten met debetkaart",
+    ),
     ("GELDOPNAME AAN ANDERE AUTOMATEN MET KAART", "Geldopneming aan andere automaten met debetkaart"),
     ("GELDOPNAME AAN ONZE AUTOMATEN MET KAART", "Geldopneming aan onze automaten met debetkaart"),
     ("GELDOPNEMING AAN ANDERE AUTOMATEN MET KAART", "Geldopneming aan andere automaten met debetkaart"),
@@ -114,6 +122,7 @@ REPLACE_IN_COLUMN_TRANSACTION_TYPE = [
     ("Hypotheekleningen Terugbetalingen", "Hypotheekleningen terugbetalingen"),
     ("Kaartbetaling", "Betaling met debetkaart"),
     ("Geldopname met kaart", "Geldopneming met debetkaart"),
+    ("Overschrijving buitenland", "Buitenlandse overschrijving"),
 ]
 
 # 'Type verrichting' values of transactions with Fintro itself (loans, fees, interest, bonus).

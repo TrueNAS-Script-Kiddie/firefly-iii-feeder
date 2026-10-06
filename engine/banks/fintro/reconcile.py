@@ -6,6 +6,8 @@ Some fields appear in BOTH a dedicated CSV column AND inside the free-text
 or merge, and raise on genuine conflicts.
 """
 
+import re
+
 from engine.banks.fintro.parsers import normalize_for_comparison
 
 
@@ -116,6 +118,11 @@ def reconcile_transaction_types(
         elif "GELDOPNAME" in column_transaction_type_norm and (
             "GELDOPNAME" in details_transaction_type_norm or "GELDOPNEMING" in details_transaction_type_norm
         ):
+            # "Geldopname in buitenland": the column adds where, the details don't say it
+            if "BUITENLAND" in column_transaction_type_norm and "BUITENLAND" not in details_transaction_type_norm:
+                details_transaction_type = re.sub(
+                    r"\b(GELDOPN(?:EMING|AME))\b", r"\1 IN BUITENLAND", details_transaction_type, count=1
+                )
             column_transaction_type = ""
         elif (
             column_transaction_type_norm == "INSTANTOVERSCHRIJVING"
@@ -142,12 +149,13 @@ def reconcile_transaction_types(
             column_transaction_type_norm == "GRENSOVERSCHRIJDENDEOVERSCHRIJVING"
             and details_transaction_type_norm == "OVERSCHRIJVINGBUITENLAND"
         ):
+            column_transaction_type = "Buitenlandse overschrijving"
             details_transaction_type = ""
         elif (
             column_transaction_type_norm == "DRINGENDEOVERSCHRIJVING"
             and details_transaction_type_norm == "DRINGENDEBUITENLANDSEBETALING"
         ):
-            column_transaction_type = "Dringende grensoverschrijdende overschrijving"
+            column_transaction_type = "Dringende buitenlandse overschrijving"
             details_transaction_type = ""
         elif details_transaction_type.startswith("6703 04XX XXXX"):
             if column_transaction_type == "Kaartbetaling":
