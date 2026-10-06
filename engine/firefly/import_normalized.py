@@ -35,6 +35,7 @@ import re
 import shutil
 import subprocess
 import sys
+import traceback
 from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any
@@ -52,6 +53,8 @@ BLOCKED_FLAG = os.path.join(DATA_DIR, "firefly-import-blocked.flag")
 RECALCULATE_FLAG = os.path.join(DATA_DIR, "firefly-recalculate.flag")
 # Set after the first failed follow-up alert, so a retry every cron minute stays silent
 FOLLOW_UP_ALERTED_FLAG = os.path.join(DATA_DIR, "firefly-follow-up-alerted.flag")
+# Set by an unexpected crash, so the retry every cron minute alerts only once
+CRASHED_FLAG = os.path.join(DATA_DIR, "firefly-import-crashed.flag")
 
 # Per row, Firefly recalculates every later balance of the account (~2 ms per later
 # transaction): recent rows cost ~0.3 s, old rows seconds each. Batch costs ~0.2 s
@@ -67,6 +70,7 @@ REFRESH_SCRIPT = os.path.join(os.path.dirname(BASE_DIR), "root-scripts", "firefl
 
 EXIT_OK = 0
 EXIT_UNAVAILABLE = 69
+EXIT_CRASHED = 70
 EXIT_PARTIAL = 75
 
 TRANSFER_MATCH_DAYS = 7
@@ -406,6 +410,29 @@ def main() -> int:
     parser.add_argument("files", nargs="*", help=f"default: every *.csv in {NORMALIZED_DIR}")
     args = parser.parse_args()
 
+    # A dry run is interactive: let a crash show its traceback
+    if args.dry_run:
+        return import_all(args)
+    try:
+        exit_code = import_all(args)
+    except Exception:
+        # Files stay in data/normalized/, so the cron retries every minute: alert once
+        details = traceback.format_exc()
+        if not os.path.exists(CRASHED_FLAG):
+            alert(
+                "FIREFLY IMPORT CRASHED",
+                f"{details}\nFiles stay in {NORMALIZED_DIR}; every cron minute retries. "
+                "No further alerts until a run ends without crashing.",
+            )
+        with open(CRASHED_FLAG, "w", encoding="utf-8") as f:
+            f.write(details)
+        return EXIT_CRASHED
+    if os.path.exists(CRASHED_FLAG):
+        os.remove(CRASHED_FLAG)
+    return exit_code
+
+
+def import_all(args: argparse.Namespace) -> int:
     files = args.files or sorted(glob.glob(os.path.join(NORMALIZED_DIR, "*.csv")))
     # A pending batch follow-up is retried even when there is nothing new to import
     follow_up_pending = not args.dry_run and os.path.exists(RECALCULATE_FLAG)

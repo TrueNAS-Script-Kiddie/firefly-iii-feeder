@@ -238,6 +238,8 @@ one `POST /api/v1/transactions`.
   `data/imported/` as `<ts>-<name>-imported-partial.csv`. A file the normalizer
   already marked `-normalized-partial` also ends up `-imported-partial`. Retry:
   move the `-import-failed.csv` into `data/normalized/` (→ `-imported-retry`).
+  An unexpected exception (a bug) also leaves the files in place: its traceback
+  is alerted once via `data/firefly-import-crashed.flag` (exit 70).
 - **Mode per run** — per row for recent data, batch (`batch_submission`) when
   more than `BATCH_OLD_ROWS_THRESHOLD` rows are older than
   `BATCH_OLD_ROW_AGE_DAYS`, relative to the day of the run. Per row, Firefly

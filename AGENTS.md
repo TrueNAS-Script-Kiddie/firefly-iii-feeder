@@ -97,7 +97,9 @@ Normalizer — [engine/process_csv.py](engine/process_csv.py) and
 Importer — [engine/firefly/import_normalized.py](engine/firefly/import_normalized.py):
 `0` all imported, `75` some rows failed, `69` Firefly unreachable or token refused
 (files stay in `data/normalized/`; alerted once per outage via
-`data/firefly-import-blocked.flag`). `data/firefly-recalculate.flag` marks a batch
+`data/firefly-import-blocked.flag`), `70` unexpected crash (files stay; traceback
+alerted once via `data/firefly-import-crashed.flag`, removed by the next run that
+ends without crashing). `data/firefly-recalculate.flag` marks a batch
 follow-up that is still pending (see below).
 
 ## Normalization principle
