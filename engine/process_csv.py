@@ -157,12 +157,13 @@ def main() -> None:
             log_event(logfile_path, f"Filtered {sum(filtered.values())} rows: {reasons}")
         log_event(logfile_path, f"Validated {len(validated_rows)} rows after filtering")
 
+        # Every row filtered (e.g. only pending rows): nothing to do, not a failure
         if not validated_rows:
             completion.finalize(
                 context,
-                exit_code=65,
-                outcome="structure_failed",
-                message="NO VALID ROWS AFTER VALIDATION",
+                exit_code=0,
+                outcome="all_filtered",
+                message="CSV ALL ROWS FILTERED",
             )
             return
 

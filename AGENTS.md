@@ -28,7 +28,7 @@ Runs unattended from a TrueNAS cron job.
 | `bank-csv-originals/` | Backup of every unique bank export; source for regenerating `data/` |
 | `data/incoming/` | Drop CSVs here to trigger processing |
 | `data/normalized/` | Normalized output waiting for import (timestamped) |
-| `data/imported/` | Normalized files after import: `<ts>-<name>-imported.csv` (`-imported-partial` if any row of the bank CSV failed, in the normalizer or the import) |
+| `data/imported/` | Normalized files after import: `<ts>-<name>-imported.csv` (`-imported-partial` if any row of the bank CSV failed, in the normalizer or the import; `-imported-retry[-partial]` for a retried `-import-failed` file) |
 | `data/processed/` | Originals after processing (success / partial / failed) |
 | `data/failed/` | Rows that failed normalization, dedup, or import; whole files bash moved after a crash |
 | `data/duplicate-index/` | Per-account persistent dedup index (successfully normalized rows only) + backups rotated per account |
@@ -88,7 +88,7 @@ Normalizer — [engine/process_csv.py](engine/process_csv.py) and
 
 | Code | Outcome |
 |------|---------|
-| `0` | success or all_full_duplicates |
+| `0` | success, all_full_duplicates, or all_filtered (nothing to do) |
 | `65` | structure_failed / all_failed |
 | `75` | partial (some rows failed) |
 | `92–97` | critical file operation errors |
@@ -133,7 +133,14 @@ re-importing a file is safe. Two modes, chosen per run (`BATCH_OLD_ROW_AGE_DAYS`
   run `batch/finish` applies the rules and the root helper recalculates all
   running balances (~1 min at 14,500 transactions).
   `data/firefly-recalculate.flag` stays until both succeeded, so an interrupted
-  or failed follow-up is retried by the next run, even without new files.
+  or failed follow-up is retried by the next run, even without new files. A
+  failure alerts once; `data/firefly-follow-up-alerted.flag` keeps the retries
+  every minute silent until the follow-up succeeds.
+
+Rows Firefly rejected go to `data/failed/<ts>-<name>-import-failed.csv`. Dropping the
+bank CSV again does not retry them: the duplicate index already has them. Fix the
+cause, then move that file to `data/normalized/`; the next run imports it (the
+alert names the exact paths).
 
 Row → split mapping lives in `build_split()`:
 

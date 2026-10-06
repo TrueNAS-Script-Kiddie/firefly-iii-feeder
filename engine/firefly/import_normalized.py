@@ -5,7 +5,8 @@ One POST per transaction; runs with many old rows use batch mode. Per file:
   - every row imported / already present -> file moved to data/imported/
     (as -imported-partial when the normalizer already dropped rows of the bank CSV)
   - some rows failed -> failed rows to data/failed/<ts>-<name>-import-failed.csv,
-    file moved to data/imported/ as -imported-partial, alert on stderr
+    file moved to data/imported/ as -imported-partial, alert on stderr; moving that
+    failed file into data/normalized/ retries it (-> -imported-retry[-partial])
   - Firefly unreachable or token refused -> run stops, file stays for the next run;
     alerted once per outage (flag file), not every cron minute
 
@@ -49,6 +50,8 @@ LOG_DIR = os.path.join(DATA_DIR, "logs")
 BLOCKED_FLAG = os.path.join(DATA_DIR, "firefly-import-blocked.flag")
 # Set while batch-submitted transactions still need rules + running balances
 RECALCULATE_FLAG = os.path.join(DATA_DIR, "firefly-recalculate.flag")
+# Set after the first failed follow-up alert, so a retry every cron minute stays silent
+FOLLOW_UP_ALERTED_FLAG = os.path.join(DATA_DIR, "firefly-follow-up-alerted.flag")
 
 # Per row, Firefly recalculates every later balance of the account (~2 ms per later
 # transaction): recent rows cost ~0.3 s, old rows seconds each. Batch costs ~0.2 s
@@ -221,11 +224,13 @@ def import_file(
     show: int,
 ) -> collections.Counter:
     name = os.path.basename(path)
-    # '<ts>-<name>-normalized[-partial].csv' -> '<ts>-<name>': every output keeps the
-    # normalizer's run timestamp, so all files of one bank CSV sort together
+    # '<ts>-<name>-normalized[-partial].csv' or a retried '<ts>-<name>-import-failed.csv'
+    # -> '<ts>-<name>': every output keeps the normalizer's run timestamp, so all files
+    # of one bank CSV sort together
     stem = os.path.splitext(name)[0]
-    base = re.sub(r"-normalized(-partial)?$", "", stem)
+    base = re.sub(r"-(normalized(-partial)?|import-failed)$", "", stem)
     normalized_partial = stem.endswith("-normalized-partial")
+    retry = stem.endswith("-import-failed")
     logfile = os.path.join(LOG_DIR, f"{base}-import.log")
 
     def log(message: str) -> None:
@@ -298,19 +303,23 @@ def import_file(
         return counts
 
     # -partial: not every row of the bank CSV reached Firefly (normalizer or import)
-    target_name = f"{base}-imported{'-partial' if normalized_partial else ''}.csv"
+    kind = "imported-retry" if retry else "imported"
+    target_name = f"{base}-{kind}{'-partial' if normalized_partial else ''}.csv"
     if failed:
         failed_path = os.path.join(FAILED_DIR, f"{base}-import-failed.csv")
+        # A retried file already carries import_error: replace it, don't add a second one
+        fieldnames = [field for field in rows[0] if field != "import_error"] + ["import_error"]
         with open(failed_path, "w", encoding="utf-8", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=[*rows[0].keys(), "import_error"], delimiter=";")
+            writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter=";")
             writer.writeheader()
             for row, reason in failed:
                 writer.writerow({**row, "import_error": reason})
-        target_name = f"{base}-imported-partial.csv"
+        target_name = f"{base}-{kind}-partial.csv"
         reasons = "\n".join(reason for _, reason in failed[:20])
         alert(
             f"FIREFLY IMPORT PARTIAL: {name} ({counts['failed']} of {len(rows)} rows failed)",
-            f"File: {name}\nFailed rows: {failed_path}\nLog: {logfile}\n{dict(counts)}\n\n{reasons}",
+            f"File: {name}\nFailed rows: {failed_path}\nLog: {logfile}\n{dict(counts)}\n\n{reasons}\n\n"
+            f"Retry after fixing the cause: move {failed_path} to {NORMALIZED_DIR}/",
         )
     shutil.move(path, os.path.join(IMPORTED_DIR, target_name))
     return counts
@@ -329,6 +338,14 @@ def count_old_rows(path: str, cutoff: str) -> int:
         )
 
 
+def alert_follow_up(subject: str, body: str) -> None:
+    """Alert once while the follow-up keeps failing; the cron retries every minute."""
+    if not os.path.exists(FOLLOW_UP_ALERTED_FLAG):
+        alert(subject, f"{body}\n\nNo further alerts until it succeeds.")
+    with open(FOLLOW_UP_ALERTED_FLAG, "w", encoding="utf-8") as f:
+        f.write(subject + "\n")
+
+
 def finish_batch(client: FireflyClient) -> bool:
     """
     Apply rules to every batch-submitted transaction (including those of an
@@ -340,11 +357,11 @@ def finish_batch(client: FireflyClient) -> bool:
         status, response = client.request("POST", "batch/finish?apply_rules=true", timeout=FINISH_TIMEOUT_SECONDS)
     except FireflyUnavailableError as exc:
         # Slow is not down: keep the follow-up pending instead of blocking imports
-        alert("FIREFLY BATCH FINISH FAILED", f"{exc}\n\nRules are pending; the next import run retries.")
+        alert_follow_up("FIREFLY BATCH FINISH FAILED", f"{exc}\n\nRules are pending; the next import run retries.")
         return False
     if status in (200, 204):
         return True
-    alert(
+    alert_follow_up(
         f"FIREFLY BATCH FINISH FAILED: HTTP {status}",
         f"{response}\n\nRules are pending; the next import run retries.",
     )
@@ -361,15 +378,15 @@ def recalculate_running_balances() -> bool:
     subject = "FIREFLY RUNNING BALANCES NOT RECALCULATED"
     footer = f"\n\nRetried on the next import run while {RECALCULATE_FLAG} exists."
     if not os.path.isfile(REFRESH_SCRIPT):
-        alert(subject, f"{REFRESH_SCRIPT} is not installed (source: deploy/).{footer}")
+        alert_follow_up(subject, f"{REFRESH_SCRIPT} is not installed (source: deploy/).{footer}")
         return False
     try:
         result = subprocess.run(command, capture_output=True, text=True, timeout=RECALCULATE_TIMEOUT_SECONDS)
     except (OSError, subprocess.TimeoutExpired) as exc:
-        alert(subject, f"{' '.join(command)}\n{exc}{footer}")
+        alert_follow_up(subject, f"{' '.join(command)}\n{exc}{footer}")
         return False
     if result.returncode != 0:
-        alert(subject, f"{' '.join(command)}\nexit {result.returncode}\n{result.stderr[-2000:]}{footer}")
+        alert_follow_up(subject, f"{' '.join(command)}\nexit {result.returncode}\n{result.stderr[-2000:]}{footer}")
         return False
     return True
 
@@ -423,6 +440,8 @@ def main() -> int:
         if not args.dry_run and os.path.exists(RECALCULATE_FLAG):
             if finish_batch(client) and recalculate_running_balances():
                 os.remove(RECALCULATE_FLAG)
+                if os.path.exists(FOLLOW_UP_ALERTED_FLAG):
+                    os.remove(FOLLOW_UP_ALERTED_FLAG)
     except (FireflyAuthError, FireflyUnavailableError) as exc:
         if args.dry_run:
             print(f"BLOCKED: {exc}", file=sys.stderr)

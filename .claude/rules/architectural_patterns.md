@@ -20,14 +20,15 @@ ordered sequence. Each phase must succeed before the next begins:
    `filter_regex` (dropped rows are counted and logged per reason), then `regex`
    validation (`validate_and_prepare`). A row with a failing cell is marked, not
    fatal: it goes to normalize-failed in the loop. Only all rows failing, or a
-   file mixing several `partition_by` values, rejects the file (exit 65).
+   file mixing several `partition_by` values, rejects the file (exit 65). All
+   rows filtered is `all_filtered`: nothing to do, exit 0.
 4. **Resolve account-specific dedup-index path** — from `duplicate_key.partition_by`.
 5. **Load dedup index** — per-account persistent CSV
    (`load_duplicate_index` in [engine/core/duplicate_index.py](../../engine/core/duplicate_index.py)).
 6. **Per-row loop** — `extract_duplicate_key` → `classify_duplicate` → bank's
    `normalize_row` → write temp output.
 7. **Outcome classification** — `success` / `partial` / `all_failed` /
-   `all_full_duplicates` / `structure_failed` / `error`.
+   `all_full_duplicates` / `all_filtered` / `structure_failed` / `error`.
 8. **Finalize** — single exit path for all file moves, index commit, alert
    (`finalize` in [engine/core/completion.py](../../engine/core/completion.py)).
 
@@ -235,7 +236,8 @@ one `POST /api/v1/transactions`.
   `data/firefly-import-blocked.flag`; any other rejection fails only that row
   (to `data/failed/<ts>-<name>-import-failed.csv`) and the file moves to
   `data/imported/` as `<ts>-<name>-imported-partial.csv`. A file the normalizer
-  already marked `-normalized-partial` also ends up `-imported-partial`.
+  already marked `-normalized-partial` also ends up `-imported-partial`. Retry:
+  move the `-import-failed.csv` into `data/normalized/` (→ `-imported-retry`).
 - **Mode per run** — per row for recent data, batch (`batch_submission`) when
   more than `BATCH_OLD_ROWS_THRESHOLD` rows are older than
   `BATCH_OLD_ROW_AGE_DAYS`, relative to the day of the run. Per row, Firefly
@@ -244,7 +246,8 @@ one `POST /api/v1/transactions`.
   the root helper `deploy/firefly-refresh-running-balance.bash` through a sudo
   rule: Firefly has no API for it). `firefly-recalculate.flag` is set before the
   first batch row and removed only after the follow-up succeeded; a failure
-  alerts and the next run retries, also when there are no new files. A slow
+  alerts once (`firefly-follow-up-alerted.flag`) and every next run retries
+  silently, also when there are no new files. A slow
   `batch/finish` is not an outage (own long timeout, no block flag).
 - **Dry run** — `--dry-run` runs the same decisions (including simulated
   transfer claims) without sending or moving anything.
