@@ -162,7 +162,7 @@ def extract_details(
     RE_DOORLOPENDE_OPDRACHT = re.compile(
         r"^(UW )"  # group 1: drop
         r"(DOORLOPENDE OPDRACHT)"  # group 2: details_transaction_type
-        r"( TEN GUNSTE VAN REKENING )"  # group 3: drop
+        r"( TEN GUNSTE VAN REKENING | NAAR )"  # group 3: drop
         r"(.+)$"  # group 4: details_opposing_account_iban/bic/name
     )
     match = RE_DOORLOPENDE_OPDRACHT.search(remaining_details)
