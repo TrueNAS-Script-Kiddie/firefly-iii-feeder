@@ -1,4 +1,4 @@
-# Bank CSV Normalizer
+# Firefly III Feeder
 
 Ingests bank-exported CSVs, validates and normalizes transaction data,
 deduplicates against a persistent per-account index, emits a unified
@@ -24,7 +24,7 @@ Runs unattended from a TrueNAS cron job.
 | [engine/firefly/](engine/firefly/) | Firefly III import: `api` (REST client), `import_normalized` (importer) |
 | [deploy/](deploy/) | Source of root-side helper scripts; installed by hand on each server, never run from here (see "Root helper") |
 | [config/](config/) | `<bank>.yaml` configs (bank name is the filename) + `app.env` (`FIREFLY_URL`, `FIREFLY_TOKEN`) |
-| [bank-csv-normalizer.bash](bank-csv-normalizer.bash) | Cron entry; `flock`, upload check (ctime ≥ 30 s + complete last line), normalizes each incoming CSV, then runs the importer |
+| [firefly-iii-feeder.bash](firefly-iii-feeder.bash) | Cron entry; `flock`, upload check (ctime ≥ 30 s + complete last line), normalizes each incoming CSV, then runs the importer |
 | `bank-csv-originals/` | Backup of every unique bank export; source for regenerating `data/` |
 | `data/incoming/` | Drop CSVs here to trigger processing |
 | `data/normalized/` | Normalized output waiting for import (timestamped) |
@@ -42,7 +42,7 @@ SFTP watcher excludes that file, so a local copy is never uploaded over it.
 
 ```bash
 # Manual single run (normalize data/incoming/, then import data/normalized/)
-./bank-csv-normalizer.bash
+./firefly-iii-feeder.bash
 
 # TrueNAS cron job: every minute, as the user that owns the folder, "Hide Standard Error" off
 # (stderr = alert email), with the encrypted-dataset lock-guard in the Command field
@@ -76,7 +76,7 @@ Regression test, before every parser change is committed (desktop, in the repo;
 the originals are only read via the share; exit 1 when anything changed):
 
 ```bash
-python -m engine.regression [--base REF] [--show N] "//<server>/bank-csv-normalizer/bank-csv-originals/*.csv"
+python -m engine.regression [--base REF] [--show N] "//<server>/firefly-iii-feeder/bank-csv-originals/*.csv"
 ```
 
 Every reported change must be explained: fixed rows, and changed outputs that
@@ -206,7 +206,7 @@ root, through a passwordless sudo rule:
 
   ```bash
   install -d -o root -g root -m 755 <app-ds>/root-scripts
-  install -o root -g root -m 755 <app-ds>/bank-csv-normalizer/deploy/firefly-refresh-running-balance.bash <app-ds>/root-scripts/
+  install -o root -g root -m 755 <app-ds>/firefly-iii-feeder/deploy/firefly-refresh-running-balance.bash <app-ds>/root-scripts/
   ```
 
 - Sudo rule: TrueNAS GUI → Credentials → Users → the cron user → "Allowed sudo
@@ -236,7 +236,7 @@ Wipe Firefly's transactions and the expense/revenue accounts they created
 accounts' IBANs). `destroy` stops partway with a 504, hence the loops:
 
 ```bash
-cd <app-ds>/bank-csv-normalizer && . config/app.env
+cd <app-ds>/firefly-iii-feeder && . config/app.env
 ff() { curl -s -o /dev/null -w '%{http_code}' -X DELETE -H "Authorization: Bearer ${FIREFLY_TOKEN}" -H 'Accept: application/json' "${FIREFLY_URL}/api/v1/data/$1"; }
 for objects in transactions expense_accounts revenue_accounts; do until code=$(ff "destroy?objects=${objects}"); echo "${objects} ${code}"; [ "${code}" = 204 ]; do :; done; done
 echo "purge $(ff purge)"

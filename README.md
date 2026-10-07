@@ -1,4 +1,4 @@
-# Bank CSV Normalizer
+# Firefly III Feeder
 
 Automated pipeline for ingesting bank-exported CSVs, validating them,
 normalizing transactions into a unified model, deduplicating against a
@@ -20,8 +20,8 @@ Designed for unattended cron execution on TrueNAS or any Linux host.
 ## Project Structure
 
 ```
-bank-csv-normalizer/
-├── bank-csv-normalizer.bash       # Cron entry (flock, upload check)
+firefly-iii-feeder/
+├── firefly-iii-feeder.bash       # Cron entry (flock, upload check)
 ├── engine/
 │   ├── process_csv.py             # Normalizer entry point
 │   ├── core/                      # csv_runtime, csv_validation,
@@ -88,7 +88,7 @@ bank-csv-normalizer/
 Manual:
 
 ```bash
-./bank-csv-normalizer.bash
+./firefly-iii-feeder.bash
 ```
 
 Cron: TrueNAS cron job every minute as the owning user, with "Hide Standard
@@ -108,7 +108,7 @@ originals through the last commit and the working tree, and reports each row
 whose result changed (exit 1 if any):
 
 ```bash
-python -m engine.regression "//<server>/bank-csv-normalizer/bank-csv-originals/*.csv"
+python -m engine.regression "//<server>/firefly-iii-feeder/bank-csv-originals/*.csv"
 ```
 
 ## Lint
