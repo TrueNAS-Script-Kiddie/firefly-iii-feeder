@@ -130,6 +130,11 @@ filtering/tagging later.
 
 ## Firefly III Import
 
+Categories and tags are out of scope. Firefly rules apply what they can on
+import; everything else is classified by a separate tool in a private repo,
+through Firefly's API. Nothing personal (counterparty rules, categories, tags)
+belongs in this repo.
+
 One `POST /api/v1/transactions` per row, with `error_if_duplicate_hash`, so
 re-importing a file is safe. Two modes, chosen per run (`BATCH_OLD_ROW_AGE_DAYS`,
 `BATCH_OLD_ROWS_THRESHOLD`; the age cutoff is relative to the day of the run):
