@@ -46,7 +46,9 @@ bank-csv-normalizer/
 ## How It Works
 
 1. Bash script runs (cron or manually). With no CSV in `incoming/` or
-   `normalized/` it exits at once (builtins only); otherwise it takes an
+   `normalized/` and no pending `data/firefly-recalculate.flag` (rules and
+   running balances still due after a large import) it exits at once
+   (builtins only); otherwise it takes an
    exclusive `flock`, and a second instance exits immediately.
 2. For each CSV in `data/incoming/`:
    - Skips a file until nothing has touched it for 30 s (its `ctime`, which
@@ -60,7 +62,8 @@ bank-csv-normalizer/
 4. A single exit path (`completion.finalize`) moves the original CSV,
    commits the updated duplicate index, moves the normalized output, rotates
    backups, cleans the temp dir, logs, alerts on failure, and exits with an
-   outcome code (`0`, `65`, `75`, `92–97`, `99`).
+   outcome code (`0`, `65`, `75`, `92`/`93`/`94`/`97`, `99`; see `AGENTS.md` →
+   "Exit Codes").
 5. After all incoming files, still under the lock, the importer
    (`engine.firefly.import_normalized`) sends every row in `data/normalized/`
    to Firefly III, one API call per transaction, and moves each
@@ -74,6 +77,7 @@ bank-csv-normalizer/
 - Python 3.10+
 - `pyyaml` (all other runtime deps are stdlib)
 - Bash, `stat`, `tail`, `mv`, `flock`
+- `sudo` and `docker`, only for the root helper below
 - Firefly III ≥ 6.7.0 with "batch processing" enabled in its admin configuration
 - A Firefly III Personal Access Token in `config/app.env`
 - For history imports: the root helper in `deploy/` and a sudo rule for it (see
@@ -95,12 +99,23 @@ Direct (for debugging):
 ```bash
 PYTHONPATH=. python3 -m engine.process_csv <csv_path> <YYYYMMDD-HHMMSS> <logfile_path>
 PYTHONPATH=. python3 -m engine.firefly.import_normalized --dry-run --show 3
+# Why a row fails: every parser step, the values found, the exact error
+PYTHONPATH=. python3 -m engine.banks.fintro.debug_row <csv> <line-or-Volgnummer>
+```
+
+Regression test, before committing a parser change: runs every row of the
+originals through the last commit and the working tree, and reports each row
+whose result changed (exit 1 if any):
+
+```bash
+python -m engine.regression "//<server>/bank-csv-normalizer/bank-csv-originals/*.csv"
 ```
 
 ## Lint
 
 ```bash
 ruff check .
+pre-commit run --all-files   # what every commit runs: ruff, ruff format, shfmt, shellcheck
 ```
 
 Configured in `ruff.toml` (line-length 120, py310 target,

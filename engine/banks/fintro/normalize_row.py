@@ -18,6 +18,7 @@ tables that shape the user-visible notes text.
 """
 
 import re
+from decimal import Decimal
 from typing import Any
 
 from engine.banks.fintro.extract_details import extract_details
@@ -25,6 +26,7 @@ from engine.banks.fintro.parsers import (
     apply_replacements,
     extract_structured_ref,
     normalize_for_comparison,
+    parse_comma_decimal_amount,
     parse_ddmmyyyy,
     parse_iban,
 )
@@ -78,13 +80,10 @@ REPLACE_IN_DETAILS_TRANSACTION_TYPE = [
     ),
     ("GELDOPNAME AAN ANDERE AUTOMATEN MET KAART", "Geldopneming aan andere automaten met debetkaart"),
     ("GELDOPNAME AAN ONZE AUTOMATEN MET KAART", "Geldopneming aan onze automaten met debetkaart"),
-    ("GELDOPNEMING AAN ANDERE AUTOMATEN MET KAART", "Geldopneming aan andere automaten met debetkaart"),
-    ("GELDOPNEMING AAN ONZE AUTOMATEN MET KAART", "Geldopneming aan onze automaten met debetkaart"),
     (
         "GELDOPNEMING AAN ANDERE AUTOMATEN MET DEBETKAART NUMMER",
         "Geldopneming aan andere automaten met debetkaart",
     ),
-    ("GELDOPNEMING AAN ONZE AUTOMATEN MET DEBETKAART NUMMER", "Geldopneming aan onze automaten met debetkaart"),
     (
         "GELDOPNEMING AAN ONZE AUTOMATEN BE MET DEBETKAART NUMMER",
         "Geldopneming aan onze automaten met debetkaart",
@@ -325,9 +324,10 @@ def normalize_row(csv_row: dict[str, str]) -> dict[str, Any]:
             details_exchange_and_transaction_costs, REPLACE_IN_DETAILS_EXCHANGE_AND_TRANSACTION_COSTS
         )
         details_eatc_parts = details_exchange_and_transaction_costs.split()
+        # Only an exact repeat of the amount ("EUR 1.234,56" for 1234,56) adds nothing
         if len(details_eatc_parts) != 2 or not (
             details_eatc_parts[0] == column_account_currency_code
-            and float(details_eatc_parts[1].replace(",", ".")) == abs(float(column_amount.replace(",", ".")))
+            and parse_comma_decimal_amount(details_eatc_parts[1]) == abs(Decimal(column_amount.replace(",", ".")))
         ):
             if re.match(r"^[A-Za-z]{3} \d", details_exchange_and_transaction_costs):
                 sign = "-" if column_amount.startswith("-") else ""

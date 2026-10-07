@@ -99,7 +99,8 @@ def main() -> int:
         new_status, new_result, where = new.get(key, ("absent", None, where))
         label = f"{where} {key[1]}"
         if old_status == new_status == "ok":
-            diffs = [f for f in new_result if old_result.get(f) != new_result.get(f)]
+            # Union, so a field dropped from (or added to) the output is reported too
+            diffs = [f for f in {**old_result, **new_result} if old_result.get(f) != new_result.get(f)]
             if diffs:
                 changed_fields.update(diffs)
                 lines = "".join(f"\n      {f}: {old_result.get(f)!r} -> {new_result.get(f)!r}" for f in diffs)

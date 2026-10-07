@@ -1,7 +1,8 @@
 """
 Pure parsing/formatting helpers for Fintro:
 - IBAN parsing/validation
-- Dutch date parsing ('dd/mm/yyyy' and 'dd/mm' with year fallback)
+- Day-first date parsing ('dd/mm/yyyy' and 'dd/mm' with year fallback)
+- Amounts with a decimal comma and thousands dots ('1.234,56')
 - Structured reference (+++nnn/nnnn/nnnnn+++) handling
 - Accent-insensitive string comparison
 - Sequential string replacement
@@ -10,6 +11,7 @@ Pure parsing/formatting helpers for Fintro:
 import re
 import unicodedata
 from datetime import date
+from decimal import Decimal
 
 
 def parse_iban(value: str, *, error_message: str | None = None) -> str:
@@ -77,6 +79,13 @@ def parse_ddmmyyyy_time(date_value: str, time_value: str | None) -> str:
     if not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", time_value):
         raise ValueError(f"Invalid time format: {time_value}")
     return f"{iso_date} {time_value}"
+
+
+def parse_comma_decimal_amount(value: str) -> Decimal | None:
+    """'1.234,56' or '1234,56' -> Decimal('1234.56'); None when it is not such an amount."""
+    if not re.fullmatch(r"\d{1,3}(?:\.\d{3})+,\d+|\d+,\d+", value):
+        return None
+    return Decimal(value.replace(".", "").replace(",", "."))
 
 
 def canonicalize_structured_ref(raw: str) -> str:

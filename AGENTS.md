@@ -65,8 +65,10 @@ success is silent.
 
 ```bash
 ruff check .
+pre-commit run --all-files   # what every commit runs: ruff, ruff format, shfmt, shellcheck
 ```
-Config: [ruff.toml](ruff.toml) — line-length 120, py310 target, selects `E,F,W,I,UP,B`.
+Config: [ruff.toml](ruff.toml) — line-length 120, py310 target, selects `E,F,W,I,UP,B`;
+hooks in [.pre-commit-config.yaml](.pre-commit-config.yaml).
 
 Regression test, before every parser change is committed (desktop, in the repo;
 the originals are only read via the share; exit 1 when anything changed):
@@ -92,7 +94,10 @@ Normalizer — [engine/process_csv.py](engine/process_csv.py) and
 | `0` | success, all_full_duplicates, or all_filtered (nothing to do) |
 | `65` | structure_failed / all_failed |
 | `75` | partial (some rows failed) |
-| `92–97` | critical file operation errors |
+| `92` | normalized output not moved (index rolled back) |
+| `93` | duplicate index not committed |
+| `94` | original CSV not moved |
+| `97` | duplicate index update not prepared |
 | `99` | unexpected exception |
 
 Importer — [engine/firefly/import_normalized.py](engine/firefly/import_normalized.py):
@@ -155,7 +160,9 @@ Row → split mapping lives in `build_split()`:
 - Counterparty IBAN of an own asset account → **transfer**, deduplicated by
   "match or create": the first side creates it, the other side claims it
   (same accounts, same amount, ±7 days). Order and history coverage of the
-  accounts' CSVs don't matter.
+  accounts' CSVs don't matter. The transfer carries only the first side's
+  data: the claiming side's Volgnummer (`external_id`), notes and bank
+  reference stay in its `data/imported/` file, not in Firefly.
 - Empty description → counterparty name → first line of `notes` (Firefly
   requires a description).
 - No counterparty → `(onbekend)`, except cash withdrawals (Firefly's Cash

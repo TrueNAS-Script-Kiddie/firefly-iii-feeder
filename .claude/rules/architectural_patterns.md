@@ -106,12 +106,16 @@ written yet.
 - *1b* — `extract_details()` in [engine/banks/fintro/extract_details.py](../../engine/banks/fintro/extract_details.py)
   parses the free-text `details` column in two sub-passes:
   1. Easy-to-detect postfixes anchored with `$` are stripped first
-     (VALUTADATUM, BANKREFERENTIE, UITGEVOERD OP).
+     (VALUTADATUM, BANKREFERENTIE, UITGEVOERD OP, then the message:
+     `MEDEDELING : …` or ZONDER MEDEDELING).
   2. The remainder is matched by leading pattern anchored with `^` to
      identify transaction type and extract the rest (VERBETERING, STORTING, DOORLOPENDE
      OPDRACHT, DOMICILIERING, BUITENLANDSE OVERSCHRIJVING, OVERSCHRIJVING,
      BETALING, ANNULERING BETALING, MOBIELE BETALING, GELDOPNEMING, old-card
-     fallback).
+     fallback). The old-card fallback, only for rows before 2018-09-01, takes
+     whatever is left as the counterparty, even after another pattern matched.
+     It is not guarded further because that history is complete: every such
+     row is in the originals and covered by the regression test.
 
   Each matched segment is removed from `remaining_details`. Anything left at
   the end raises `ValueError`.
@@ -235,7 +239,8 @@ one `POST /api/v1/transactions`.
 - **Own transfers: match or create** — both accounts' CSVs carry the same
   movement; the first side creates the transfer, the other claims it
   (`claim_transfer`: same accounts, amount, ±`TRANSFER_MATCH_DAYS`, one claim
-  per side). Robust to file order and unequal history coverage.
+  per side). Robust to file order and unequal history coverage. The claiming
+  side's own fields (`external_id`, notes) are not added to the transfer.
 - **Run-level vs row-level failure** — `FireflyAuthError` /
   `FireflyUnavailableError` ([engine/firefly/api.py](../../engine/firefly/api.py))
   stop the run and leave files in place, alerted once per outage via

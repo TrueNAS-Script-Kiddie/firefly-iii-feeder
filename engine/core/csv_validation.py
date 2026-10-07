@@ -92,7 +92,7 @@ def validate_and_prepare(
         # Regex validation: mark the row instead of failing the whole file;
         # process_csv routes marked rows to the normalize-failed output
         for internal_name, cfg in columns_cfg["required"].items():
-            if "regex" in cfg and not re.match(cfg["regex"], mapped_row[internal_name]):
+            if "regex" in cfg and not re.fullmatch(cfg["regex"], mapped_row[internal_name]):
                 mapped_row["_validation_error"] = (
                     f"Column '{internal_name}' failed regex validation: "
                     f"value='{mapped_row[internal_name]}' regex='{cfg['regex']}'"
@@ -174,11 +174,11 @@ def autodetect_bank(csv_rows: list[dict[str, str]], all_bank_configs: dict[str, 
     - A bank matches only if ALL required columns (any of their possible names)
       appear in the CSV header.
     - If exactly one bank matches → return that config.
-    - If zero banks match → return None.
-    - If multiple banks match → raise an error (ambiguous CSV).
+    - If zero banks match → ValueError listing the missing columns per bank.
+    - If multiple banks match → ValueError (ambiguous CSV).
 
     Returns:
-        The selected bank config dict, or None if no match.
+        The selected bank config dict.
     """
 
     if not csv_rows:

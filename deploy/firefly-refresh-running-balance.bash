@@ -3,7 +3,7 @@
 #
 # Runs as root through a passwordless sudo rule for the cron user, so it takes
 # no arguments: that user cannot change what runs. Install it root-owned in a
-# folder the cron user cannot write (see CLAUDE.md, "Firefly III Import").
+# folder the cron user cannot write (see AGENTS.md, "Root helper").
 #
 # The container is found by name, so it survives renames (other server, new
 # Firefly release): exactly one running "firefly" container that is not one of
