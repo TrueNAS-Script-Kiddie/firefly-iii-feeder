@@ -50,7 +50,9 @@ SFTP watcher excludes that file, so a local copy is never uploaded over it.
 # Normalizer only (debugging)
 PYTHONPATH=. python3 -m engine.process_csv <csv_path> <YYYYMMDD-HHMMSS> <logfile_path>
 
-# Debug failing rows: every parser step, the values found, and the exact failure.
+# Debug a row: whether the account's duplicate index already has it (then it is skipped,
+# or a conflict shows the differing fields), every parser step, the values found, the exact
+# failure. Run on the server: the index is in data/, which is not synced.
 # <line> = "source row" in the normalizer log <ts>-<name>.log, or a Volgnummer (reads only)
 PYTHONPATH=. python3 -m engine.banks.fintro.debug_row <csv> <line-or-Volgnummer> [...]
 

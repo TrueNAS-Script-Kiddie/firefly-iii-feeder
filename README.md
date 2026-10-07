@@ -99,7 +99,7 @@ Direct (for debugging):
 ```bash
 PYTHONPATH=. python3 -m engine.process_csv <csv_path> <YYYYMMDD-HHMMSS> <logfile_path>
 PYTHONPATH=. python3 -m engine.firefly.import_normalized --dry-run --show 3
-# Why a row fails: every parser step, the values found, the exact error
+# Why a row fails or is skipped: duplicate-index status, every parser step, the exact error
 PYTHONPATH=. python3 -m engine.banks.fintro.debug_row <csv> <line-or-Volgnummer>
 ```
 
