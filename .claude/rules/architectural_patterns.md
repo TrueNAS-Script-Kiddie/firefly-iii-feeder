@@ -254,7 +254,8 @@ one `POST /api/v1/transactions`.
 - **Mode per run** — per row for recent data, batch (`batch_submission`) when
   more than `BATCH_OLD_ROWS_THRESHOLD` rows are older than
   `BATCH_OLD_ROW_AGE_DAYS`, relative to the day of the run. Per row, Firefly
-  recalculates every later balance of the account, so old rows cost seconds each;
+  recalculates every later balance of the account, so `import_file` sends each
+  file oldest first (failures keep file order), and old rows cost seconds each;
   batch costs a fixed follow-up instead (rules via `batch/finish`, balances via
   the root helper `deploy/firefly-refresh-running-balance.bash` through a sudo
   rule: Firefly has no API for it). `firefly-recalculate.flag` is set before the

@@ -35,8 +35,9 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 import traceback
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -226,6 +227,7 @@ def import_file(
     batch: bool,
     dry_run: bool,
     show: int,
+    run_note: str,
 ) -> collections.Counter:
     name = os.path.basename(path)
     # '<ts>-<name>-normalized[-partial].csv' or a retried '<ts>-<name>-import-failed.csv'
@@ -244,18 +246,25 @@ def import_file(
             log_event(logfile, message)
 
     counts: collections.Counter = collections.Counter()
-    failed: list[tuple[dict[str, str], str]] = []
+    failed: list[tuple[int, dict[str, str], str]] = []
     shown = 0
+    started = time.monotonic()
 
     with open(path, encoding="utf-8", newline="") as f:
         rows = list(csv.DictReader(f, delimiter=";"))
-    log(f"Importing {name}: {len(rows)} rows")
+    log(f"Importing {name}: {len(rows)} rows, oldest first; {run_note}")
 
-    for line_no, row in enumerate(rows, start=2):
+    # Oldest first: per row, Firefly recalculates the balance of every later transaction of
+    # the account, and banks export newest first. Within a day, reverse file order (= oldest
+    # first for a newest-first export). Line numbers stay those of the file.
+    numbered = sorted(
+        enumerate(rows, start=2), key=lambda item: (item[1].get("primary_transaction_date", ""), -item[0])
+    )
+    for line_no, row in numbered:
         try:
             decision, split, transfer_match = build_split(row, assets)
         except (ValueError, KeyError, ArithmeticError) as exc:
-            failed.append((row, f"line {line_no}: {exc}"))
+            failed.append((line_no, row, f"line {line_no}: {exc}"))
             counts["failed"] += 1
             continue
 
@@ -287,7 +296,7 @@ def import_file(
             counts["already present"] += 1
         else:
             reason = f"line {line_no}: HTTP {status}: {response.get('message', '')} {response.get('errors', '')}"
-            failed.append((row, reason))
+            failed.append((line_no, row, reason))
             counts["failed"] += 1
             log(reason)
             continue
@@ -299,8 +308,9 @@ def import_file(
                 {"date": date.fromisoformat(split["date"]), "out": side == "out", "in": side == "in"}
             )
 
-    log(f"Result {name}: {dict(counts)}")
-    for _, reason in failed:
+    log(f"Result {name}: {dict(counts)} in {time.monotonic() - started:.0f} s")
+    failed.sort(key=lambda item: item[0])  # back in file order
+    for _, _, reason in failed:
         log(f"FAILED {reason}")
 
     if dry_run:
@@ -316,10 +326,10 @@ def import_file(
         with open(failed_path, "w", encoding="utf-8", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter=";")
             writer.writeheader()
-            for row, reason in failed:
+            for _, row, reason in failed:
                 writer.writerow({**row, "import_error": reason})
         target_name = f"{base}-{kind}-partial.csv"
-        reasons = "\n".join(reason for _, reason in failed[:20])
+        reasons = "\n".join(reason for _, _, reason in failed[:20])
         alert(
             f"FIREFLY IMPORT PARTIAL: {name} ({counts['failed']} of {len(rows)} rows failed)",
             f"File: {name}\nFailed rows: {failed_path}\nLog: {logfile}\n{dict(counts)}\n\n{reasons}\n\n"
@@ -447,25 +457,47 @@ def import_all(args: argparse.Namespace) -> int:
     try:
         client = FireflyClient(CONFIG.get("FIREFLY_URL", ""), CONFIG.get("FIREFLY_TOKEN", ""))
         if files:
+            started = time.monotonic()
             assets = load_asset_accounts(client)
             pool = load_transfer_pool(client)
             cutoff = (date.today() - timedelta(days=BATCH_OLD_ROW_AGE_DAYS)).isoformat()
             old_rows = sum(count_old_rows(path, cutoff) for path in files)
             batch = old_rows > BATCH_OLD_ROWS_THRESHOLD
+            # Logged per file, so each import log says how the run went about it
+            run_note = (
+                f"mode {'batch' if batch else 'per row'} ({old_rows} rows before {cutoff} in this run); "
+                f"read {len(assets)} asset accounts and {sum(len(t) for t in pool.values())} transfers "
+                f"in {time.monotonic() - started:.0f} s"
+            )
             if args.dry_run:
-                print(f"== mode: {'batch' if batch else 'per row'} ({old_rows} rows before {cutoff})")
+                print(f"== {run_note}")
             elif batch:
                 # Before the first batch row, so an interruption still triggers the follow-up
                 open(RECALCULATE_FLAG, "w", encoding="utf-8").close()
             for path in files:
                 if args.dry_run:
                     print(f"== {os.path.basename(path)}")
-                counts = import_file(path, client, assets, pool, batch, args.dry_run, args.show)
+                counts = import_file(path, client, assets, pool, batch, args.dry_run, args.show, run_note)
                 if args.dry_run:
                     print(f"  {dict(counts)}")
                 totals.update(counts)
         if not args.dry_run and os.path.exists(RECALCULATE_FLAG):
-            if finish_batch(client) and recalculate_running_balances():
+            follow_up_log = os.path.join(LOG_DIR, f"{datetime.now():%Y%m%d-%H%M%S}-firefly-follow-up.log")
+            started = time.monotonic()
+            finished = finish_batch(client)
+            recalculated = False
+            log_event(
+                follow_up_log,
+                f"batch/finish (rules): {'ok' if finished else 'failed'} in {time.monotonic() - started:.0f} s",
+            )
+            if finished:
+                started = time.monotonic()
+                recalculated = recalculate_running_balances()
+                log_event(
+                    follow_up_log,
+                    f"running balances: {'ok' if recalculated else 'failed'} in {time.monotonic() - started:.0f} s",
+                )
+            if finished and recalculated:
                 os.remove(RECALCULATE_FLAG)
                 if os.path.exists(FOLLOW_UP_ALERTED_FLAG):
                     os.remove(FOLLOW_UP_ALERTED_FLAG)

@@ -32,7 +32,7 @@ Runs unattended from a TrueNAS cron job.
 | `data/processed/` | Originals after processing (success / partial / failed) |
 | `data/failed/` | Rows that failed normalization, dedup, or import; whole files bash moved after a crash |
 | `data/duplicate-index/` | Per-account persistent dedup index (successfully normalized rows only) + backups rotated per account |
-| `data/logs/` | Per-run logs: `<ts>-<name>.log` (normalizer) and `<ts>-<name>-import.log`; `<ts>` = normalizer run, so all files of one bank CSV sort together |
+| `data/logs/` | Per-run logs: `<ts>-<name>.log` (normalizer) and `<ts>-<name>-import.log` (mode, Firefly state read time, result and duration); `<ts>` = normalizer run, so all files of one bank CSV sort together. `<ts>-firefly-follow-up.log`: rules and running balances after a batch import, with durations |
 | `data/temp/` | Working files; cleaned up after each run, except after a critical error (it then holds the index rollback copy) |
 
 The token lives only in the server copy of `config/app.env` (mode 600); the
@@ -137,7 +137,9 @@ re-importing a file is safe. Two modes, chosen per run (`BATCH_OLD_ROW_AGE_DAYS`
 - **Per row** (default; ~0.3 s per recent row): Firefly applies rules and
   recalculates running balances immediately. Cost grows with the age of the
   row, because every later balance of the account is recalculated (~3 s for a
-  2015 row).
+  2015 row). Hence each file is sent oldest first (banks export newest first):
+  every row is then the latest of its account (newest first roughly doubles
+  the time of a few hundred rows).
 - **Batch** (more than 20 rows older than 6 months, i.e. history imports;
   ~0.2 s per row): rows are submitted with `batch_submission`. At the end of the
   run `batch/finish` applies the rules and the root helper recalculates all
