@@ -78,7 +78,7 @@ free-text `details` column. The normalizer compares both sources and either
 merges them or raises `ValueError` on mismatch — neither source is blindly
 trusted.
 
-Precedence rules live in [engine/banks/fintro/normalize_row.py](../../engine/banks/fintro/normalize_row.py):
+Precedence rules live in [engine/banks/fintro/normalize.py](../../engine/banks/fintro/normalize.py):
 
 - **CSV wins** for amount, IBAN, dates, and free-text messages (details
   validates).
@@ -97,7 +97,7 @@ Both follow the normalization principle in AGENTS.md: nothing meaningful is lost
 
 ## 6. Two-Phase `normalize_row` + Sequential `details` Parsing
 
-`normalize_row()` in [engine/banks/fintro/normalize_row.py](../../engine/banks/fintro/normalize_row.py)
+`normalize_row()` in [engine/banks/fintro/normalize.py](../../engine/banks/fintro/normalize.py)
 is split into two explicit phases:
 
 **Phase 1 — Extraction.** Pull all values into named variables; no output is
@@ -122,7 +122,7 @@ written yet.
 
 **Phase 2 — Reconcile, reformat, assemble.** No parsing of `details` at this
 stage; only cross-source decisions, cosmetic replacement (via the
-`REPLACE_IN_*` tables in `normalize_row.py`), card-number masking and
+`REPLACE_IN_*` tables in `normalize.py`), card-number masking and
 exchange-cost formatting (two small regexes), and final
 assembly of the 18 `NORMALIZED_FIELDNAMES` defined in
 [engine/process_csv.py](../../engine/process_csv.py).

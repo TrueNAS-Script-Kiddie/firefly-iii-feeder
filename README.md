@@ -27,7 +27,7 @@ bank-csv-normalizer/
 │   ├── core/                      # csv_runtime, csv_validation,
 │   │                              # duplicate_index, completion, runtime
 │   ├── banks/
-│   │   └── fintro/                # Per-bank package: normalize_row,
+│   │   └── fintro/                # Per-bank package: normalize,
 │   │                              # extract_details, parsers, reconcile
 │   └── firefly/                   # api (REST client), import_normalized
 ├── config/

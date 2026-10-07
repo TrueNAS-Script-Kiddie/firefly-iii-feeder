@@ -26,18 +26,29 @@ import tempfile
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+def import_from(root: str, module_name: str):
+    """
+    Import `module_name` from `root` only. The repo root (the working directory
+    of `python -m`) stays off sys.path meanwhile: Python prefers a package with an
+    __init__.py anywhere on the path over one without, so an old ref without them
+    would silently load the working tree instead.
+    """
+    saved_path = sys.path[:]
+    sys.path[:] = [root] + [p for p in saved_path if os.path.abspath(p or os.curdir) != REPO_ROOT]
+    try:
+        module = importlib.import_module(module_name)
+    finally:
+        sys.path[:] = saved_path
+    if not os.path.abspath(module.__file__).startswith(os.path.abspath(root) + os.sep):
+        raise RuntimeError(f"{module_name} loaded from {module.__file__}, not from {root}")
+    return module
+
+
 def load_engine(root: str):
     """Import csv_runtime/csv_validation from `root`, dropping any engine modules loaded before."""
     for name in [m for m in sys.modules if m == "engine" or m.startswith("engine.")]:
         del sys.modules[name]
-    sys.path.insert(0, root)
-    try:
-        return (
-            importlib.import_module("engine.core.csv_runtime"),
-            importlib.import_module("engine.core.csv_validation"),
-        )
-    finally:
-        sys.path.pop(0)
+    return import_from(root, "engine.core.csv_runtime"), import_from(root, "engine.core.csv_validation")
 
 
 def run(root: str, paths: list[str]) -> dict[tuple[str, str], tuple[str, object, str]]:
@@ -48,11 +59,7 @@ def run(root: str, paths: list[str]) -> dict[tuple[str, str], tuple[str, object,
     for path in paths:
         raw_rows = csv_runtime.load_csv_rows(path)
         bank_cfg = csv_validation.autodetect_bank(raw_rows, configs)
-        sys.path.insert(0, root)
-        try:
-            bank = importlib.import_module(f"engine.banks.{bank_cfg['bank']}")
-        finally:
-            sys.path.pop(0)
+        bank = import_from(root, f"engine.banks.{bank_cfg['bank']}")
         validated = csv_validation.validate_and_prepare(raw_rows, bank_cfg)[0]
         for row in validated:
             key = (row.get("asset_account_iban", ""), row.get("external_id", ""))
