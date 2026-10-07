@@ -110,13 +110,21 @@ def finalize(
         # new rows to add and their normalized output is kept. A crashed run
         # discards its output, so its rows must not be marked as seen.
         if duplicate_index_rows_to_add and outcome in ("success", "partial"):
-            updated_duplicate_index = create_updated_duplicate_index(
+            updated_duplicate_index, old_columns = create_updated_duplicate_index(
                 paths["duplicate_index_csv"],
                 paths["duplicate_index_backup_dir"],
                 run_timestamp,
                 csv_filename,
                 duplicate_index_rows_to_add,
             )
+            if old_columns is not None:
+                new_columns = list(duplicate_index_rows_to_add[0].keys())
+                context["log_event"](
+                    logfile_path,
+                    "Duplicate index columns follow the config now: "
+                    f"added {[c for c in new_columns if c not in old_columns]} (old rows: not recorded), "
+                    f"removed {[c for c in old_columns if c not in new_columns]}",
+                )
     except Exception as e:
         log_alert_exit(
             context,

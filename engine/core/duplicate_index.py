@@ -23,13 +23,17 @@ MAX_BACKUPS = 50
 MAX_BACKUP_AGE_DAYS = 365
 RUN_TS_FORMAT = "%Y%m%d-%H%M%S"
 
+# Value of a column added to columns.required after a row was indexed: unknown, so
+# not compared (an empty value would conflict with every row the bank fills it for)
+NOT_RECORDED = "<not recorded>"
+
 
 # ---------------------------------------------------------------------------
 # Load duplicate index
 # ---------------------------------------------------------------------------
 def load_duplicate_index(duplicate_index_path: str) -> defaultdict[str, list[dict[str, str]]]:
     """
-    Load the global duplicate index from CSV.
+    Load an account's duplicate index from CSV.
     Returns a dict: duplicate_key → list of rows with that key.
     """
 
@@ -83,29 +87,45 @@ def create_updated_duplicate_index(
     run_timestamp: str,
     csv_filename: str,
     duplicate_index_rows: list[dict[str, str]],
-) -> str:
+) -> tuple[str, list[str] | None]:
     """
     Create a timestamped updated duplicate-index file:
-    - Copy existing duplicate-index.csv if present
+    - Copy existing duplicate-index.csv if present; when columns.required changed,
+      rewrite it with the new columns instead (added: NOT_RECORDED, removed: dropped)
     - Otherwise create empty base
     - Append duplicate_index_rows
-    Returns the path to the updated duplicate index file.
+    Returns the path to the updated duplicate index file, and the old columns when
+    they were rewritten (else None).
     """
 
     # Path for updated snapshot
-    bank_name = os.path.splitext(os.path.basename(duplicate_index_path))[0].replace("-duplicate-index", "")
+    partition = os.path.splitext(os.path.basename(duplicate_index_path))[0].replace("-duplicate-index", "")
     updated_duplicate_index = os.path.join(
-        backup_dir, f"{run_timestamp}-{os.path.splitext(csv_filename)[0]}-{bank_name}-duplicate-index.csv"
+        backup_dir, f"{run_timestamp}-{os.path.splitext(csv_filename)[0]}-{partition}-duplicate-index.csv"
     )
 
     # Base: existing dup-index or empty file
+    old_columns = None
     if os.path.exists(duplicate_index_path):
-        shutil.copy2(duplicate_index_path, updated_duplicate_index)
+        columns = list(duplicate_index_rows[0].keys())
+        with open(duplicate_index_path, newline="", encoding="utf-8") as index_file:
+            reader = csv.DictReader(index_file, delimiter=";")
+            existing_columns = reader.fieldnames or []
+            if existing_columns == columns:
+                shutil.copy2(duplicate_index_path, updated_duplicate_index)
+            else:
+                old_columns = list(existing_columns)
+                with open(updated_duplicate_index, "w", newline="", encoding="utf-8") as updated_file:
+                    writer = csv.DictWriter(
+                        updated_file, fieldnames=columns, delimiter=";", restval=NOT_RECORDED, extrasaction="ignore"
+                    )
+                    writer.writeheader()
+                    writer.writerows(reader)
 
     # Append new rows
     append_to_duplicate_index(updated_duplicate_index, duplicate_index_rows)
 
-    return updated_duplicate_index
+    return updated_duplicate_index, old_columns
 
 
 # ---------------------------------------------------------------------------
@@ -169,7 +189,7 @@ def classify_duplicate(
     """
     Classify a row against the duplicate index using YAML rules.
 
-    identical = all required fields match
+    identical = all required fields match (fields NOT_RECORDED in the index are skipped)
     conflict  = key exists but required fields differ
     new       = key not present
     """
@@ -185,7 +205,11 @@ def classify_duplicate(
         required_match = True
 
         for field in required_fields:
-            if existing.get(field, "").strip() != row.get(field, "").strip():
+            # Missing: a column added to the config since this row was indexed
+            existing_value = existing.get(field, NOT_RECORDED)
+            if existing_value == NOT_RECORDED:
+                continue
+            if existing_value.strip() != row.get(field, "").strip():
                 required_match = False
                 break
 

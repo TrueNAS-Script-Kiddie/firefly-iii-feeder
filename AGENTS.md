@@ -76,7 +76,8 @@ python -m engine.regression [--base REF] [--show N] "//<server>/bank-csv-normali
 ```
 
 Every reported change must be explained: fixed rows, and changed outputs that
-only add information. Verify the normalizer end to end by placing a sample CSV in `data/incoming/`
+only add information. Verify the normalizer end to end on the server (via the share; `data/` is not
+synced) by placing a sample CSV in `data/incoming/`
 and inspecting `data/normalized/`, `data/failed/`, and `data/logs/` (failure
 reasons are in the normalizer log, not the `-import.log`); verify
 the importer with `--dry-run` on the server (the token lives there).
@@ -202,7 +203,42 @@ root, through a passwordless sudo rule:
   updates): the full path of the installed script, no wildcards (a wildcard
   would give root in any container).
 - The importer runs it as `sudo -n <script>` (`REFRESH_SCRIPT`). Missing script,
-  rule or container gives an alert, and the flag keeps the follow-up pending.
+  rule or container gives one alert, and the flag keeps the follow-up pending.
+
+## Start Over (full reload)
+
+Rows already in the duplicate index never reach the parser again, so a parser
+change only affects new rows. To give already imported transactions the new
+output too, wipe Firefly and `data/` and reload every original. Not needed for
+a renamed bank column (add the name to `names`) or a changed `columns.required`
+(the index adapts, see architectural_patterns.md §7). A column the bank only
+recently added is absent from older originals: reloading fills it only after a
+fresh history export.
+
+Takes about an hour for ~14,500 rows (batch mode plus the follow-up). Run the
+regression test first (desktop); the commands below run on the server, as the
+cron user. Wait until `data/incoming/` and `data/normalized/` are empty, so no
+run is busy.
+
+Wipe Firefly's transactions and the expense/revenue accounts they created
+(asset accounts, rules and categories stay; the importer needs the asset
+accounts' IBANs). `destroy` stops partway with a 504, hence the loops:
+
+```bash
+cd <app-ds>/bank-csv-normalizer && . config/app.env
+ff() { curl -s -o /dev/null -w '%{http_code}' -X DELETE -H "Authorization: Bearer ${FIREFLY_TOKEN}" -H 'Accept: application/json' "${FIREFLY_URL}/api/v1/data/$1"; }
+for objects in transactions expense_accounts revenue_accounts; do until code=$(ff "destroy?objects=${objects}"); echo "${objects} ${code}"; [ "${code}" = 204 ]; do :; done; done
+echo "purge $(ff purge)"
+```
+
+Every line ends in `504` (repeated) or `204`; anything else (`401`: token)
+loops forever, so stop it with Ctrl-C. `purge` must print `204`. Then empty `data/` (the originals stay) and
+reload them; the cron picks them up within a minute:
+
+```bash
+rm -rf data/duplicate-index data/normalized data/imported data/processed data/failed data/logs data/temp data/*.flag
+cp bank-csv-originals/*.csv data/incoming/
+```
 
 ## Adding a New Bank
 

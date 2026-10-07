@@ -121,7 +121,9 @@ selects `E,F,W,I,UP,B`).
 `.vscode/sftp.json` uploads every saved file to the deployment host, so an
 edit is live on the next cron minute. Update `host`, `username`,
 `privateKeyPath`, and `remotePath` to match your environment. Its `ignore`
-list keeps dev files, caches and `config/app.env` off the server.
+list keeps dev files, caches and `config/app.env` off the server, and `data/` and
+`bank-csv-originals/` out of sync: they are server state, and the watcher's
+auto-delete would mirror a local delete there.
 
 ## License
 

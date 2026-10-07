@@ -143,6 +143,12 @@ returns:
 - `identical` — key seen, all required fields match → silently skip.
 - `conflict` — key seen, required fields differ → write to duplicate-failed.
 
+The index columns are `duplicate_key` + `columns.required`. When the config's
+required columns change, the next commit rewrites the index with the new
+columns (logged): a removed column is dropped, an added one is `<not recorded>`
+(`NOT_RECORDED`) for the old rows and skipped when comparing them, so no
+re-import is needed.
+
 The index is committed at the end: snapshot (timestamped copy in
 `backups/`) → atomic copy-to-live (temp file + `os.replace`, `copy_atomically`)
 → rotate backups (`rotate_duplicate_backups`, per account: at most
