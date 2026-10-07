@@ -3,12 +3,6 @@ config/app.env
 *.xlsx
 .claude/settings.local.json
 data/
-# Scraped third-party content and upstream clones; not ours to publish
-firefly-iii-kb/raw/
-
-# Legacy / archived code
-legacy/
-
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
