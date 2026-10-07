@@ -50,19 +50,11 @@ BASE_DIR: str = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR: str = os.path.join(BASE_DIR, "data")
 CONFIG_DIR: str = os.path.join(BASE_DIR, "config")
 
-# Globals set in main()
-csv_file_path: str
-csv_filename: str
-run_timestamp: str
-logfile_path: str
-
 
 # -------------------------------------------------------------------------
 # Main pipeline
 # -------------------------------------------------------------------------
 def main() -> None:
-    global csv_file_path, csv_filename, run_timestamp, logfile_path
-
     if len(sys.argv) != 4:
         print("Usage: process_csv.py <csv_path> <run_timestamp> <logfile_path>")
         sys.exit(1)
@@ -82,7 +74,7 @@ def main() -> None:
     )
 
     # ---------------------------------------------------------------------
-    # CONTEXT (legacy + new paths[])
+    # CONTEXT: pipeline state, passed on to completion.finalize
     # ---------------------------------------------------------------------
     context: dict[str, Any] = {
         "csv_file_path": csv_file_path,
@@ -151,7 +143,7 @@ def main() -> None:
         # -----------------------------------------------------------------
         # Validate + map + filter rows
         # -----------------------------------------------------------------
-        validated_rows, column_map, filtered = validate_and_prepare(csv_rows, bank_cfg)
+        validated_rows, _, filtered = validate_and_prepare(csv_rows, bank_cfg)
         if filtered:
             reasons = ", ".join(f"{count}x {reason}" for reason, count in filtered.most_common())
             log_event(logfile_path, f"Filtered {sum(filtered.values())} rows: {reasons}")
