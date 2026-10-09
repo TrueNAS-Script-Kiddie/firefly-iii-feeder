@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import importlib
 import os
+import re
 import sys
 import traceback
 from datetime import datetime
@@ -8,6 +9,7 @@ from typing import Any
 
 import engine.core.completion as completion
 from engine.core.csv_runtime import (
+    archive_paths,
     build_paths,
     describe_output,
     ensure_writer,
@@ -55,6 +57,7 @@ NORMALIZED_FIELDNAMES = [
 # -------------------------------------------------------------------------
 BASE_DIR: str = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR: str = os.path.join(BASE_DIR, "data")
+ARCHIVE_DIR: str = os.path.join(BASE_DIR, "archive")
 CONFIG_DIR: str = os.path.join(BASE_DIR, "config")
 
 
@@ -89,7 +92,7 @@ def main() -> None:
     # ---------------------------------------------------------------------
     # BUILD PATHS → canonical paths[] dict
     # ---------------------------------------------------------------------
-    paths = build_paths(data_dir=DATA_DIR, run_id=run_id, source_filename=csv_filename)
+    paths = build_paths(data_dir=DATA_DIR, archive_dir=ARCHIVE_DIR, run_id=run_id, source_filename=csv_filename)
 
     # ---------------------------------------------------------------------
     # CONTEXT: pipeline state, passed on to completion.finalize
@@ -107,7 +110,6 @@ def main() -> None:
     try:
         # Ensure directory structure exists
         for d in (
-            paths["processed_dir"],
             paths["failed_dir"],
             paths["normalized_dir"],
             paths["duplicate_index_dir"],
@@ -161,25 +163,30 @@ def main() -> None:
         # -----------------------------------------------------------------
         # Validate + map + filter rows
         # -----------------------------------------------------------------
-        validated_rows, _, filtered = validate_and_prepare(csv_rows, bank_cfg)
+        validated_rows, column_map, filtered = validate_and_prepare(csv_rows, bank_cfg)
         if filtered:
             reasons = ", ".join(f"{count}x {reason}" for reason, count in filtered.most_common())
             log_event(logfile_path, f"Filtered {sum(filtered.values())} rows: {reasons}")
         log_event(logfile_path, f"Validated {len(validated_rows)} rows after filtering")
 
-        # Every row filtered (e.g. only pending rows): nothing to do, not a failure
-        if not validated_rows:
-            completion.finalize(
-                context,
-                exit_code=0,
-                outcome="all_filtered",
-                message="CSV ALL ROWS FILTERED",
-            )
-            return
+        partition_by = bank_cfg.get("duplicate_key", {}).get("partition_by")
+        valid_rows = [r for r in validated_rows if "_validation_error" not in r]
+
+        # Every row filtered (e.g. only pending rows): nothing to do, not a failure. The archive
+        # still needs account and period, so they come from the filtered rows; an account that
+        # fails its regex counts as unknown, as in a valid row.
+        all_filtered = not validated_rows
+        if all_filtered:
+            partition_regex = bank_cfg["columns"]["required"].get(partition_by, {}).get("regex")
+            mapped_rows = [
+                {name: raw.get(column, "").strip() for name, column in column_map.items()} for raw in csv_rows
+            ]
+            valid_rows = [
+                r for r in mapped_rows if not partition_regex or re.fullmatch(partition_regex, r.get(partition_by, ""))
+            ]
 
         # Every row invalid → the export format changed; reject the file as a whole
-        first_valid_row = next((r for r in validated_rows if "_validation_error" not in r), None)
-        if first_valid_row is None:
+        if not all_filtered and not valid_rows:
             completion.finalize(
                 context,
                 exit_code=65,
@@ -193,25 +200,22 @@ def main() -> None:
         # partition_by column value (e.g. asset_account_iban) determines
         # which index file is used, so one index per account
         # -----------------------------------------------------------------
-        partition_by = bank_cfg.get("duplicate_key", {}).get("partition_by")
         if partition_by:
-            partition_value = first_valid_row.get(partition_by, "").replace(" ", "").upper()
+            partition_value = valid_rows[0].get(partition_by, "").replace(" ", "").upper() if valid_rows else ""
             if not partition_value:
                 completion.finalize(
                     context,
                     exit_code=65,
                     outcome="structure_failed",
-                    message=f"DUPLICATE INDEX: partition_by column '{partition_by}' is empty in first valid row",
+                    message=(
+                        f"CSV ALL ROWS FILTERED, account unknown: no row has a valid '{partition_by}'"
+                        if all_filtered
+                        else f"DUPLICATE INDEX: partition_by column '{partition_by}' is empty in first valid row"
+                    ),
                 )
                 return
             # One index per account: a file mixing accounts would be checked against the wrong one
-            partition_values = sorted(
-                {
-                    r.get(partition_by, "").replace(" ", "").upper()
-                    for r in validated_rows
-                    if "_validation_error" not in r
-                }
-            )
+            partition_values = sorted({r.get(partition_by, "").replace(" ", "").upper() for r in valid_rows})
             if len(partition_values) > 1:
                 completion.finalize(
                     context,
@@ -232,13 +236,27 @@ def main() -> None:
         # -----------------------------------------------------------------
         # Name every output after its content: bank, account, period
         # -----------------------------------------------------------------
-        valid_rows = [r for r in validated_rows if "_validation_error" not in r]
         date_format = bank_cfg["columns"]["required"].get("primary_transaction_date", {}).get("date_format")
         first_date, last_date = transaction_period(valid_rows, date_format)
         base = describe_output(run_id, bank_name, partition_value, first_date, last_date)
-        paths.update(output_paths(DATA_DIR, base, os.path.splitext(csv_filename)[1]))
+        paths.update(output_paths(DATA_DIR, base))
+        # Account folder as in row_key: the account, or the bank without partition_by
+        paths.update(
+            archive_paths(
+                ARCHIVE_DIR, run_id, csv_filename, bank_name, partition_value or bank_name, first_date, last_date
+            )
+        )
         period = f"{first_date} to {last_date}" if first_date else "unknown"
         log_event(logfile_path, f"Account: {partition_value or '-'}, period: {period}, output: {base}")
+
+        if all_filtered:
+            completion.finalize(
+                context,
+                exit_code=0,
+                outcome="all_filtered",
+                message="CSV ALL ROWS FILTERED",
+            )
+            return
 
         # -----------------------------------------------------------------
         # Load duplicate index

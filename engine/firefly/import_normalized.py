@@ -4,7 +4,7 @@ Import normalized CSVs from data/normalized/ into Firefly III via its REST API.
 One POST per transaction; runs with many old rows use batch mode. Per file:
   - every row imported / already present -> file moved to data/imported/
     (as -imported-partial when the normalizer already dropped rows of the bank CSV)
-  - some rows failed -> failed rows to data/failed/<base>-import-failed.csv,
+  - some rows failed -> failed rows to data/failed-rows/<base>-import-failed.csv,
     file moved to data/imported/ as -imported-partial, alert on stderr; moving that
     failed file into data/normalized/ retries it (-> -imported-retry[-partial])
   - Firefly unreachable or token refused -> run stops, file stays for the next run;
@@ -48,7 +48,7 @@ from engine.firefly.api import FireflyAuthError, FireflyClient, FireflyUnavailab
 DATA_DIR = os.path.join(BASE_DIR, "data")
 NORMALIZED_DIR = os.path.join(DATA_DIR, "normalized")
 IMPORTED_DIR = os.path.join(DATA_DIR, "imported")
-FAILED_DIR = os.path.join(DATA_DIR, "failed")
+FAILED_DIR = os.path.join(DATA_DIR, "failed-rows")
 LOG_DIR = os.path.join(DATA_DIR, "logs")
 BLOCKED_FLAG = os.path.join(DATA_DIR, "firefly-import-blocked.flag")
 # Set while batch-submitted transactions still need rules + running balances

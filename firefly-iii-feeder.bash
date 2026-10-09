@@ -12,8 +12,11 @@ fi
 BASE_DIR="${PWD}"
 IN_DIR="${BASE_DIR}/data/incoming"
 NORMALIZED_DIR="${BASE_DIR}/data/normalized"
-FAILED_DIR="${BASE_DIR}/data/failed"
 LOG_DIR="${BASE_DIR}/data/logs"
+# Originals Python could not archive itself (it archives every other one)
+UNPROCESSED_DIR="${BASE_DIR}/archive/unprocessed"
+# A name starting with a run id is a copy from the archive: it keeps that name
+ARRIVAL_RUN_ID='^[0-9]{8}-[0-9]{6}-[0-9]{3}-'
 
 PYTHON_MODULE="engine.process_csv"
 
@@ -27,8 +30,8 @@ INCOMPLETE_LINE_GRACE_SECONDS=600
 PENDING=("${IN_DIR}"/*.csv "${NORMALIZED_DIR}"/*.csv)
 ((${#PENDING[@]})) || [[ -e "${RECALCULATE_FLAG}" ]] || exit 0
 
-# data/ is not in git: a fresh deploy has no log folder, and logging would fail
-mkdir -p "${LOG_DIR}" "${FAILED_DIR}" || exit 1
+# data/ and archive/ are not in git: on a fresh deploy logging and the fallback move would fail
+mkdir -p "${LOG_DIR}" "${UNPROCESSED_DIR}" || exit 1
 
 # Ensure Python can import the engine/ package (cron has no PYTHONPATH)
 export PYTHONPATH="${BASE_DIR}"
@@ -46,11 +49,20 @@ TAKEN=("${LOG_DIR}/${RUN_START}-"*)
 ((${#TAKEN[@]})) && exit 0
 FILE_NUMBER=0
 
-# Append to the log of the current file, whatever name Python gave it
+# Append to the log of the current file, whatever name Python gave it ("<run>.log" until then)
 run_log() {
-	local logs=("${LOG_DIR}/${RUN_ID}".log "${LOG_DIR}/${RUN_ID}"-*.log) now
+	local logs=("${LOG_DIR}/${RUN_ID}"-*.log) now
 	printf -v now '%(%F %T)T' -1
 	echo "${now} $*" >>"${logs[0]:-${LOG_DIR}/${RUN_ID}.log}"
+}
+
+# Original Python left in incoming/ → archive/unprocessed/ as "<run>-<name>", or under its own
+# name when that starts with a run id; a file of that name there is the same export: replaced
+archive_unprocessed() {
+	local name="${FILENAME}"
+	[[ "${name}" =~ ${ARRIVAL_RUN_ID} ]] || name="${RUN_ID}-${name}"
+	[[ -f "${FILE_PATH}" ]] || return 0
+	mv -f "${FILE_PATH}" "${UNPROCESSED_DIR}/${name}" && run_log "Original: ${UNPROCESSED_DIR}/${name}"
 }
 
 for FILE_PATH in "${IN_DIR}"/*.csv; do
@@ -86,20 +98,20 @@ for FILE_PATH in "${IN_DIR}"/*.csv; do
 
 	1)
 		# Python crashed before cleanup (traceback on stderr) → bash must move the file
-		[[ -f "${FILE_PATH}" ]] && mv "${FILE_PATH}" "${FAILED_DIR}/${RUN_ID}-crashed-${FILENAME}"
+		archive_unprocessed
 		run_log "${PYTHON_MODULE} crashed before cleanup (exit code 1)."
 		;;
 
 	9[2-7])
 		# Critical file operation error; Python already alerted. A file left in
 		# incoming would be retried (and alerted) every minute, so move it.
-		[[ -f "${FILE_PATH}" ]] && mv "${FILE_PATH}" "${FAILED_DIR}/${RUN_ID}-move-failed-${FILENAME}"
+		archive_unprocessed
 		run_log "${PYTHON_MODULE}: critical file operation error (exit code ${EXIT_CODE}), see above."
 		;;
 
 	*)
 		# Unknown exit code → treat as Python crash; nobody else alerted, so stderr
-		[[ -f "${FILE_PATH}" ]] && mv "${FILE_PATH}" "${FAILED_DIR}/${RUN_ID}-crashed-${FILENAME}"
+		archive_unprocessed
 		run_log "${PYTHON_MODULE} exited with unknown code ${EXIT_CODE}."
 		echo "${PYTHON_MODULE} exited with unknown code ${EXIT_CODE} on ${FILENAME} (run ${RUN_ID})." >&2
 		;;

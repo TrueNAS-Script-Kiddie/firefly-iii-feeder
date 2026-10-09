@@ -1,6 +1,6 @@
 # Plan 00 — Archive and starting over
 
-Status: **in progress — steps 1–2 done; next: step 3 (archive in the normalizer).** To be carried out
+Status: **in progress — steps 1–3 done; next: step 4 (git in bash).** To be carried out
 before [plan 01](01-core-fintro-firefly.md) step 4 (its steps 0–3 are done) and before
 [plan 02](02-argenta.md). Examples are made up (public repo).
 
@@ -285,7 +285,7 @@ As built: key `id_ed25519_finance_data` and config `finance-data.config` in the 
 `.ssh/`; `git init -b main` (the server's git defaults to `master`). With `sudo -u`, add `-H`, or git
 looks for its config in `/root`.
 
-### Step 3 — Archive in the normalizer
+### Step 3 — Archive in the normalizer ✅
 
 Prerequisite: step 2 done (`archive/` exists under git; `archive` in the SFTP `ignore`).
 
@@ -315,6 +315,25 @@ Prerequisite: step 2 done (`archive/` exists under git; `archive` in the SFTP `i
 7. On the server, the existing `data/processed/` and `data/failed/` are left as they are: nothing
    reads them any more, and the first `start-over.bash` moves them aside with the rest of `data/`.
    Their originals are in `bank-csv-originals/` and come into the archive at step 6.
+
+As built, with choices not stated above:
+- `all_filtered`: account and period come from the filtered rows through the `column_map`
+  `validate_and_prepare` already returns (its signature is unchanged); an account that fails its
+  column's `regex` counts as unknown → `unprocessed/`, exit 65.
+- Removing a finished original's copies from `unprocessed/` is a separate step 5 of `finalize`,
+  after the critical steps and not critical itself; it also runs when the original was dropped as
+  already archived. Steps 5–7 became 6–8.
+- Bash no longer moves anything into `data/`, so `FAILED_DIR` is gone instead of renamed, and bash
+  creates only `archive/unprocessed/` (Python creates the account folders).
+- The alert names where the original went (`Original: …`, also in the log).
+- `run_log` wrote to a new `<run>.log` once Python had renamed the log; it now finds the renamed one.
+
+Tested in a copy (13 runs): new export, same content under another name, overlapping export,
+unknown file twice, crash (exit 1), unknown exit code on a name with a run id, a copy from
+`originals/`, a rejected file that succeeds after the fix (arrival run id kept, removed from
+`unprocessed/`), the uncorrected export after a hand fix, only pending rows with a valid and an
+invalid account, exit 94 and exit 97. Regression 0 differences on 14,080 rows; idle on the server
+1.97 ms.
 
 ### Step 4 — Git in bash
 

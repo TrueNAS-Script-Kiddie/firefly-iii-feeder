@@ -3,7 +3,7 @@ Completion module:
 Handles ALL end-of-processing operations:
 - Closing open file handles
 - Duplicate index update + backup + atomic commit + rotation
-- Moving original CSV
+- Archiving the original (archive/originals/ or archive/unprocessed/)
 - Moving normalized output
 - Cleaning up the temp directory
 - Final log + alert (on failure) + exit
@@ -11,6 +11,7 @@ Handles ALL end-of-processing operations:
 This module is the single exit path for the entire processing flow.
 """
 
+import hashlib
 import os
 import shutil
 import sys
@@ -22,6 +23,10 @@ from engine.core.duplicate_index import (
     rotate_duplicate_backups,
 )
 from engine.core.runtime import alert
+
+# Python finished the file, however many rows succeeded: the original is real bank data for
+# archive/originals/. Any other outcome (rejected, crashed) goes to archive/unprocessed/.
+FINISHED_OUTCOMES = ("success", "partial", "all_failed", "all_full_duplicates", "all_filtered")
 
 
 # ---------------------------------------------------------------------------
@@ -39,9 +44,53 @@ def log_alert_exit(context: dict[str, Any], exit_code: int, message: str) -> Non
 
     if exit_code != 0:
         subject, _, detail = message.partition("\n")
-        alert(subject, f"File: {csv_filename}\nRun: {run_id}\nLog: {logfile_path}\n{detail}".rstrip())
+        lines = [f"File: {csv_filename}", f"Run: {run_id}", f"Log: {logfile_path}"]
+        if context.get("original_archived_as"):
+            lines.append(f"Original: {context['original_archived_as']}")
+        alert(subject, "\n".join([*lines, detail]).rstrip())
 
     sys.exit(exit_code)
+
+
+# ---------------------------------------------------------------------------
+# Archive
+# ---------------------------------------------------------------------------
+def file_sha256(path: str) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def archived_copies(folder: str, sha256: str, name_suffix: str | None = None) -> list[str]:
+    """
+    Files directly in folder with this content, or (with name_suffix) whose name ends in it:
+    '-<sha8><ext>' names the export as it arrived, also after a hand fix changed its content.
+    """
+    if not os.path.isdir(folder):
+        return []
+    copies = []
+    for name in sorted(os.listdir(folder)):
+        path = os.path.join(folder, name)
+        if os.path.isfile(path) and ((name_suffix and name.endswith(name_suffix)) or file_sha256(path) == sha256):
+            copies.append(path)
+    return copies
+
+
+def move_to_unprocessed(context: dict[str, Any], path: str | None) -> None:
+    """
+    Compensating move after a critical failure: the original's rows were not recorded, so it
+    must be dropped in again. Nothing to move when it was dropped as already archived.
+    """
+    target = context["paths"]["archive_unprocessed"]
+    try:
+        if path and os.path.exists(path):
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            shutil.move(path, target)
+            context["original_archived_as"] = target
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -140,28 +189,42 @@ def finalize(
         )
 
     # ----------------------------------------------------------------------
-    # 2. Move original CSV (critical)
+    # 2. Archive the original (critical). Finished → archive/originals/
+    #    <bank>/<account>/<arrival run>-<first>_<last>-<sha8>.<ext>, else →
+    #    archive/unprocessed/. A copy whose content is already in that folder
+    #    is dropped; in originals/ also one whose sha8 a name there carries.
     # ----------------------------------------------------------------------
+    finished = outcome in FINISHED_OUTCOMES
+    archived_original = None  # where the original went; None when dropped
     try:
-        if outcome in ("structure_failed", "all_failed", "error"):
-            final_csv_path = paths["processed_failed_csv"]
-        elif outcome == "partial":
-            final_csv_path = paths["processed_partial_csv"]
+        sha256 = file_sha256(csv_file_path)
+        if finished:
+            folder = paths["archive_account_dir"]
+            name_suffix = f"-{sha256[:8]}{os.path.splitext(context['csv_filename'])[1]}"
+            target = os.path.join(folder, f"{paths['archive_original_stem']}{name_suffix}")
         else:
-            final_csv_path = paths["processed_success_csv"]
+            folder = paths["archive_unprocessed_dir"]
+            name_suffix = None
+            target = paths["archive_unprocessed"]
+        os.makedirs(folder, exist_ok=True)
 
-        shutil.move(csv_file_path, final_csv_path)
+        existing = archived_copies(folder, sha256, name_suffix)
+        if existing:
+            os.remove(csv_file_path)
+            context["original_archived_as"] = f"{existing[0]} (already archived, copy dropped)"
+        else:
+            # An existing file of that name in unprocessed/ is the same export: replaced
+            shutil.move(csv_file_path, target)
+            archived_original = target
+            context["original_archived_as"] = target
+        context["log_event"](logfile_path, f"Original: {context['original_archived_as']}")
 
     except Exception as e:
-        try:
-            shutil.move(csv_file_path, paths["processed_failed_csv"])
-        except Exception:
-            pass
-
+        move_to_unprocessed(context, csv_file_path)
         log_alert_exit(
             context,
             94,
-            f"ORIGINAL CSV MOVE ERROR: {e}\n\nTraceback:\n{traceback.format_exc()}",
+            f"ORIGINAL NOT ARCHIVED: {e}\n\nTraceback:\n{traceback.format_exc()}",
         )
 
     # ----------------------------------------------------------------------
@@ -181,10 +244,7 @@ def finalize(
             copy_atomically(updated_duplicate_index, paths["duplicate_index_csv"])
 
     except Exception as e:
-        try:
-            shutil.move(final_csv_path, paths["processed_failed_csv"])
-        except Exception:
-            pass
+        move_to_unprocessed(context, archived_original)
 
         log_alert_exit(
             context,
@@ -213,10 +273,7 @@ def finalize(
             except Exception:
                 pass
 
-        try:
-            shutil.move(final_csv_path, paths["processed_failed_csv"])
-        except Exception:
-            pass
+        move_to_unprocessed(context, archived_original)
 
         log_alert_exit(
             context,
@@ -225,7 +282,20 @@ def finalize(
         )
 
     # ----------------------------------------------------------------------
-    # 5. Rotate duplicate-index backups (not critical)
+    # 5. A finished original no longer belongs in archive/unprocessed/ (a
+    #    rejected file that now succeeds): remove copies with the same
+    #    content (not critical)
+    # ----------------------------------------------------------------------
+    if finished:
+        try:
+            for path in archived_copies(paths["archive_unprocessed_dir"], sha256):
+                os.remove(path)
+                context["log_event"](logfile_path, f"Removed from unprocessed: {path}")
+        except Exception as exc:
+            context["log_event"](logfile_path, f"[UNPROCESSED CLEANUP ERROR] {exc}")
+
+    # ----------------------------------------------------------------------
+    # 6. Rotate duplicate-index backups (not critical)
     # ----------------------------------------------------------------------
     try:
         rotate_duplicate_backups(
@@ -237,7 +307,7 @@ def finalize(
         pass
 
     # ----------------------------------------------------------------------
-    # 6. Cleanup temp directory
+    # 7. Cleanup temp directory
     # ----------------------------------------------------------------------
     try:
         shutil.rmtree(paths["temp_dir"], ignore_errors=True)
@@ -245,6 +315,6 @@ def finalize(
         pass
 
     # ----------------------------------------------------------------------
-    # 7. Final log + alert + exit
+    # 8. Final log + alert + exit
     # ----------------------------------------------------------------------
     log_alert_exit(context, exit_code, message)

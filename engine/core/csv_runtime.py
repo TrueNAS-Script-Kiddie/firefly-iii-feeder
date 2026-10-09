@@ -13,31 +13,38 @@ Nothing more, nothing less.
 import codecs
 import csv
 import os
+import re
 from typing import Any
 
 import yaml
+
+# A name starting with a run id is a copy from the archive (start-over): it keeps the run id
+# of its first arrival, so a reload processes the files in their original order
+ARRIVAL_RUN_ID = re.compile(r"^([0-9]{8}-[0-9]{6}-[0-9]{3})-")
 
 
 # ---------------------------------------------------------------------------
 # Prepare paths
 # ---------------------------------------------------------------------------
-def build_paths(data_dir: str, run_id: str, source_filename: str) -> dict[str, str]:
+def build_paths(data_dir: str, archive_dir: str, run_id: str, source_filename: str) -> dict[str, str]:
     """
     Construct all directory and file paths for a single pipeline run.
 
     Output names start as '<run>-unknown-<source name>': before the bank is known
     the source name is the only clue. describe_output() replaces them once bank,
-    account and period are known; duplicate_index_csv is set then too.
+    account and period are known; duplicate_index_csv and the archive folder are set then too.
+    An original that is not finished goes to archive/unprocessed/ as '<run>-<source name>',
+    a copy from the archive under its own name.
     """
-    stem, extension = os.path.splitext(source_filename)
+    stem = os.path.splitext(source_filename)[0]
+    unprocessed_name = source_filename if ARRIVAL_RUN_ID.match(source_filename) else f"{run_id}-{source_filename}"
 
     # ruff: noqa: E501
     # fmt: off
     paths = {
         # Directories
         "incoming_dir": os.path.join(data_dir, "incoming"),
-        "processed_dir": os.path.join(data_dir, "processed"),
-        "failed_dir": os.path.join(data_dir, "failed"),
+        "failed_dir": os.path.join(data_dir, "failed-rows"),
         "normalized_dir": os.path.join(data_dir, "normalized"),
         "temp_dir": os.path.join(data_dir, "temp"),
         "duplicate_index_dir": os.path.join(data_dir, "duplicate-index"),
@@ -49,27 +56,46 @@ def build_paths(data_dir: str, run_id: str, source_filename: str) -> dict[str, s
 
         # Temporary normalized output
         "temp_normalized_csv": os.path.join(data_dir, "temp", f"{run_id}.tmp.csv"),
+
+        # Archive; the folder for a finished original is known only with bank and account
+        "archive_unprocessed_dir": os.path.join(archive_dir, "unprocessed"),
+        "archive_unprocessed": os.path.join(archive_dir, "unprocessed", unprocessed_name),
+        "archive_account_dir": "",
+        "archive_original_stem": "",
     }
     # fmt: on
     # ruff: enable=E501
-    paths.update(output_paths(data_dir, f"{run_id}-unknown-{stem}", extension))
+    paths.update(output_paths(data_dir, f"{run_id}-unknown-{stem}"))
     return paths
 
 
-def output_paths(data_dir: str, base: str, extension: str) -> dict[str, str]:
-    """Every file named after one bank file: '<base>-<stage>'. The original keeps its extension."""
+def output_paths(data_dir: str, base: str) -> dict[str, str]:
+    """Every file in data/ named after one bank file: '<base>-<stage>.csv'."""
     return {
         "output_base": base,
         # Failed rows
-        "failed_normalize_csv": os.path.join(data_dir, "failed", f"{base}-normalize-failed.csv"),
-        "failed_duplicate_csv": os.path.join(data_dir, "failed", f"{base}-duplicate-failed.csv"),
-        # Processed originals
-        "processed_failed_csv": os.path.join(data_dir, "processed", f"{base}-processed-failed{extension}"),
-        "processed_partial_csv": os.path.join(data_dir, "processed", f"{base}-processed-partial{extension}"),
-        "processed_success_csv": os.path.join(data_dir, "processed", f"{base}-processed{extension}"),
+        "failed_normalize_csv": os.path.join(data_dir, "failed-rows", f"{base}-normalize-failed.csv"),
+        "failed_duplicate_csv": os.path.join(data_dir, "failed-rows", f"{base}-duplicate-failed.csv"),
         # Normalized output
         "normalized_partial_csv": os.path.join(data_dir, "normalized", f"{base}-normalized-partial.csv"),
         "normalized_success_csv": os.path.join(data_dir, "normalized", f"{base}-normalized.csv"),
+    }
+
+
+def archive_paths(
+    archive_dir: str, run_id: str, source_filename: str, bank: str, account: str, first_date: str, last_date: str
+) -> dict[str, str]:
+    """
+    Folder and name of a finished original: archive/originals/<bank>/<account>/
+    '<arrival run>-<first>_<last>' (period left out when unknown); finalize adds '-<sha8><ext>'.
+    """
+    arrival = ARRIVAL_RUN_ID.match(source_filename)
+    stem = arrival.group(1) if arrival else run_id
+    if first_date:
+        stem = f"{stem}-{first_date}_{last_date}"
+    return {
+        "archive_account_dir": os.path.join(archive_dir, "originals", bank, account),
+        "archive_original_stem": stem,
     }
 
 

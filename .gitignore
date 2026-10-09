@@ -3,6 +3,8 @@ config/app.env
 *.xlsx
 .claude/settings.local.json
 data/
+archive/
+data-before-start-over/
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
