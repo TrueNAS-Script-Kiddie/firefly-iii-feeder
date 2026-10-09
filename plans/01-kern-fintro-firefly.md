@@ -171,7 +171,7 @@ Uitgevoerd, met drie keuzes die hierboven nog niet stonden:
 Getest in een kopie: Fintro-export, onbekend bestand, gesimuleerde crash, bezette seconde;
 regressie 0 verschillen op 14.080 rijen; idle op de server 1,9 ms.
 
-### Stap 2 — Fintro: valutadatum en vreemde munt ✅
+### Stap 2 — Fintro: valutadatum en vreemde munt ✅ `21ce05b`
 
 Apart, zodat de regressietest precies deze verschillen toont en niets anders:
 1. `booking_date` → `interest_date` in `config/fintro.yaml`, `normalize.py`, `debug_row.py`,
@@ -203,7 +203,7 @@ Uitgerold met `data/incoming/`, `data/normalized/` en `data/failed/` leeg en gee
 14.080 rijen, elk alleen `booking_date` → `interest_date` (zelfde waarde) en de twee nieuwe velden;
 29 rijen met een vreemd bedrag, alle op de cent; `notes` en `unmapped_*` nergens veranderd.
 
-### Stap 3 — Importer ✅
+### Stap 3 — Importer ✅ `035a425`
 
 1. Eigen rekeningen opzoekbaar op **IBAN én rekeningnummer** van de Firefly-rekening:
    - eigen kant: `asset_account_iban`, of het nieuwe normalized veld `asset_account_number`
