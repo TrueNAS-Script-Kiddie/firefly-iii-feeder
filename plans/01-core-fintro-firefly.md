@@ -75,7 +75,7 @@ finance tool (private repo); what is one-off per server or impossible via the AP
 | Enabling currencies that occur in transactions | **feeder**, at import (step 3) | needed for `foreign_amount` |
 | Counterparties (expense/revenue accounts) | Firefly creates them itself on import | merging name variants: finance tool |
 | Categories, tags, rules, rule groups, budgets, recurring transactions, piggy banks | finance tool | classification, personal |
-| Firefly version, `enable_batch_processing`, Personal Access Token, default currency EUR, root helper + sudo rule, cron job, archive repo (plan 00 §5) | **by hand**, once per server, as a checklist (step 6) | the API stores the batch setting as text (Firefly ignores it); without a token there is no API; the sudo rule, cron and git setup are TrueNAS, not Firefly |
+| Firefly version, `enable_batch_processing`, Personal Access Token, default currency EUR, root helper + sudo rule, cron job, archive repo (plan 00 step 2) | **by hand**, once per server, as a checklist (step 6) | the API stores the batch setting as text (Firefly ignores it); without a token there is no API; the sudo rule, cron and git setup are TrueNAS, not Firefly |
 | Language, date format, start page | your preference, not maintained | the feeder does not need them |
 
 ## 3. Steps (order = commits)
@@ -398,7 +398,7 @@ output-contract):
      so by hand).
   5. Install the root helper + sudo rule for the cron user.
   6. Cron job in TrueNAS (every minute, lock guard, "Hide Standard Error" off).
-  7. Archive repo: Forgejo repo, deploy key, `git init` in `archive/` (plan 00 §5).
+  7. Archive repo: Forgejo repo, deploy key, `git init` in `archive/` (plan 00 step 2).
 - repeat the idle measurement and update the number if it changes.
 
 ## 4. Testing

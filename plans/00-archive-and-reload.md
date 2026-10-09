@@ -1,15 +1,15 @@
 # Plan 00 — Archive and starting over
 
-Status: **approved, not started.** To be carried out before [plan 01](01-core-fintro-firefly.md)
-step 4 (its steps 0–3 are done) and before [plan 02](02-argenta.md). Examples are made up
-(public repo).
+Status: **in progress — step 1 done; next: step 2 (setup by hand).** To be carried out
+before [plan 01](01-core-fintro-firefly.md) step 4 (its steps 0–3 are done) and before
+[plan 02](02-argenta.md). Examples are made up (public repo).
 
 Goal: you drop an export in `data/incoming/` and need to do nothing else. Everything needed to
 fill Firefly again from zero comes under version control in private Forgejo by itself, and
 starting over is one command.
 
 Hard requirement for every step: **an idle run stays free** (AGENTS.md "Idle cost"). Everything
-below runs only when there is work; the only new idle test is a builtin `[[ -e ]]` (step 3).
+below runs only when there is work; the only new idle test is a builtin `[[ -e ]]` (step 4).
 
 ## 1. Requirement
 
@@ -74,7 +74,7 @@ Becomes a hard rule in AGENTS.md (step 1):
 10. ✅ **What is only in `config/app.env` must be recreatable without git**: `FIREFLY_URL` and
     `FIREFLY_TOKEN` (create a new token in Firefly). Everything else a reload needs belongs in the
     archive; hence plan 02's `ARGENTA_MASTERCARD_PAID_FROM_IBAN` moves into `accounts.yaml`.
-11. ✅ **`bank-csv-originals/` goes away** once everything in it is in the archive: Fintro at step 5
+11. ✅ **`bank-csv-originals/` goes away** once everything in it is in the archive: Fintro at step 6
     below, Argenta at the reload of plan 02 §4. Also for testing: the regression test then reads
     the archive, with the same overlap cases.
 12. ✅ **One feeder at a time** (truenas-master only); the archive has one writer.
@@ -240,47 +240,97 @@ flowchart TD
 
 ## 4. Steps (order = commits)
 
-Every step: `pre-commit`, regression test (zero differences: nothing here changes a row).
-"Deploy = save" (AGENTS.md): save steps 2 and 3 only while `data/incoming/` and
-`data/normalized/` are empty and no flag is pending, and all files of the step in quick
-succession.
+**How each step is run** — in a fresh session, one step per session:
+1. Read AGENTS.md (hard rules, "Deploy = save", "Server access") and this plan: §2, §3, the
+   step, §5. Read the code the step touches before changing it.
+2. `git status` and `git log --oneline -5` first: other sessions commit to this repo too.
+3. Server access is read-only (AGENTS.md "Server access"); commands that write are handed to the
+   user, as the cron user. The share path from the desktop is `//<server>/firefly-iii-feeder/`.
+4. Before saving code that runs on the server (steps 3–5): check read-only that
+   `data/incoming/` and `data/normalized/` are empty and no `data/*.flag` is pending, then save
+   all files of the step in quick succession.
+5. Test as in §5 for that step; `pre-commit run --all-files`; regression test (zero differences:
+   nothing here changes a row). Real bank files used in a throwaway copy are deleted afterwards.
+6. Mark the step ✅ with its commit in this plan and update the status line; commit and push
+   only after the user's OK.
 
-### Step 1 — Requirement in AGENTS.md
+### Step 1 — Requirement in AGENTS.md ✅ `759ea61`
 
-The hard rule of §1, next to "Idle cost" and "Normalization principle", linking to this plan.
-"Start Over" and the duplicate-hash gotcha point to the rule; the rest of AGENTS.md describes
-current behaviour and follows in step 6.
+The hard rule of §1 in AGENTS.md ("Rebuild from scratch"), with "Start Over" and the
+duplicate-hash gotcha pointing to it, and a section "Server access". The rest of AGENTS.md
+describes current behaviour and follows in step 7.
 
-### Step 2 — Archive in the normalizer
+### Step 2 — Setup by hand (you, on the server)
+
+No code; the only commit is marking the step done. Claude gives the exact commands, one block per
+item, and checks each result read-only (AGENTS.md "Server access"); you paste them in your root
+shell on the server. Every command that writes in the feeder folder or the cron user's home runs
+as that user (`sudo -u <cron user> …`), so the key, `archive/` and its `.git/` belong to the cron
+user, not to root.
+1. Locally (Claude, on the desktop): `archive` and `data-before-start-over` in the `ignore` of
+   `.vscode/sftp.json` — first, so the watcher never touches them.
+2. Forgejo (you, in its web UI): create the private repo `firefly-iii-feeder-archive`, empty.
+3. A key for the cron user in its second home dir (`homedir-ds`, survives a TrueNAS update), with
+   an ssh config holding the `forgejo` alias (`IdentityFile`, `IdentitiesOnly yes`,
+   `UserKnownHostsFile` in that same folder, `BatchMode yes`, so cron never waits for a prompt);
+   its public key as a deploy key **with write access** to that repo only. One test connection
+   to put Forgejo's host key in that `known_hosts`.
+4. `git init` in `archive/` (created here), with in `.git/config`: `core.sshCommand` =
+   `ssh -F <that config>`, `user.name`/`user.email` of the private Forgejo identity, `origin` =
+   `git@forgejo:<owner>/firefly-iii-feeder-archive.git`. Check with a read-only
+   `git -C archive ls-remote origin` run as the cron user.
+
+### Step 3 — Archive in the normalizer
+
+Prerequisite: step 2 done (`archive/` exists under git; `archive` in the SFTP `ignore`).
 
 1. `finalize` (block 2, "original CSV move"): finished → `archive/originals/…`, else →
-   `archive/unprocessed/…`, with the checks of §2.4 (`hashlib`). Exit 94 then means "original not
-   archived"; the compensating move goes to `unprocessed/`.
+   `archive/unprocessed/…`, with the checks of §2.4 (`hashlib`). Details:
+   - Account folder = the `partition_by` value, else the bank name (as `row_key`). Period: as in
+     the `data/` names (`describe_output`).
+   - `all_filtered` stops today before the account is known. Determine the account from the rows
+     before filtering (e.g. `validate_and_prepare` also returns the `partition_by` values of the
+     filtered rows); only if it is still unknown → `unprocessed/` with an alert.
+   - "Same content" = equal SHA-256 of the whole file, compared with every file in the target
+     folder (few files per account); "same `<sha8>`" = the name ends in `-<sha8>.<ext>`.
+   - A file dropped because it is already archived is deleted from `incoming/`.
+   - Compensating moves (exit 92, 93, 94): the original goes to `archive/unprocessed/`; if it was
+     dropped as already archived, there is nothing to move. Exit 94 now means "original not
+     archived".
 2. `build_paths` / `output_paths`: no `processed_*` any more; `failed_dir` → `failed-rows`.
-3. Take the run id from the source name when it starts with one (§2.3); `describe_output` still
-   uses the new run id for `data/` (unique per run), only the archive name uses the old one.
-4. Bash: the fallback moves (exit 1, 92–97, unknown) → `archive/unprocessed/<run>-<name>`;
-   `FAILED_DIR` → `data/failed-rows`; `mkdir -p` also for `archive/originals` and
-   `archive/unprocessed`.
-5. Importer: `-import-failed.csv` to `data/failed-rows/`.
-6. `.gitignore`: `archive/`.
+3. Run id of arrival (§2.3): a source name matching `^[0-9]{8}-[0-9]{6}-[0-9]{3}-` keeps that
+   prefix as the archive run id, and for `unprocessed/` the name stays as it is (no second
+   prefix). `describe_output` still uses the new run id for `data/` (unique per run).
+4. Bash: the fallback moves (exit 1, 92–97, unknown) → `archive/unprocessed/`, named
+   `<RUN_ID>-<name>`, or `<name>` when it already starts with a run id (`[[ =~ ]]`, builtin); an
+   existing file of that name is overwritten (same export). `FAILED_DIR` → `data/failed-rows`;
+   `mkdir -p` also for `archive/originals` and `archive/unprocessed`.
+5. Importer: `-import-failed.csv` to `data/failed-rows/`, and the paths in its alert texts.
+6. `.gitignore`: `archive/` and `data-before-start-over/`.
+7. On the server, the existing `data/processed/` and `data/failed/` are left as they are: nothing
+   reads them any more, and the first `start-over.bash` moves them aside with the rest of `data/`.
+   Their originals are in `bank-csv-originals/` and come into the archive at step 6.
 
-### Step 3 — Git in bash
+### Step 4 — Git in bash
 
 1. After the importer, still under the lock, only in a run with work: if `archive/.git` exists,
    `git -C archive add -A`, a commit when something changed (message: the added, moved and changed
-   paths), then `git push`.
+   paths), then `git push`. Silent on success (`-q`, no output on stdout or stderr: the cron job
+   mails any output); on failure the git output goes to stderr.
 2. Push fails → `data/archive-push-pending.flag`, alert only when the flag is new. The idle test
    gets `|| [[ -e "${ARCHIVE_PUSH_FLAG}" ]]` (builtin); a run with only that flag just pushes.
    Push succeeded → flag removed.
-3. `archive/.git` missing → alert in every run with work ("archive not under git": the setup of §5
-   is missing); the files still go into `archive/`.
-4. Measure idle again, ≤ 2 ms.
+3. `archive/.git` missing → alert in every run with work ("archive not under git": step 2 is
+   missing); the files still go into `archive/`.
+4. Measure idle again on the server, ≤ 2 ms (AGENTS.md "Idle cost"; a read-only command).
 
-### Step 4 — `start-over.bash`
+### Step 5 — `start-over.bash`
 
-In the feeder folder, no arguments, as the cron user: from the root shell
-`sudo -u <cron user> ./start-over.bash`. Order as in §3.6:
+In the feeder folder, no arguments, as the cron user. Git keeps scripts as `100644` and SFTP does
+not set the execute bit, so it is started with `bash`: from the root shell
+`sudo -u <cron user> bash <app-ds>/firefly-iii-feeder/start-over.bash`; the script `cd`s to its
+own folder, like `firefly-iii-feeder.bash`. Not run on the server in this step: its first real
+run is the reload of plan 02 §4. Order as in §3.6:
 1. Refuses to run as anyone but the owner of the feeder folder (so not as root), before touching
    anything: root-owned files in `data/` or `archive/` would break the cron.
 2. `flock` on `.process.lock`, waiting, so a running run finishes first.
@@ -293,21 +343,22 @@ In the feeder folder, no arguments, as the cron user: from the root shell
 7. `archive/originals/**` and `archive/unprocessed/*` → `data/incoming/` (copies, flat folder).
 8. Releases the lock and says: cron does the rest (~1 hour), alerts by mail.
 
-### Step 5 — Fintro into the archive (you, on the server)
+### Step 6 — Fintro into the archive (you, on the server)
 
-After the setup of §5: `bank-csv-originals/Fintro/*.csv` once into `data/incoming/` (as the cron
-user, see §5). All rows are
-already known, so nothing goes to Firefly; the 16 files go into `originals/` and into Forgejo.
-Bash ignores Argenta's xlsx and pdf until plan 02 step 1, so those stay in `bank-csv-originals/`
-until the reload of plan 02 §4.
+After steps 3 and 4 are live: Claude gives the command, you run it as the cron user —
+`bank-csv-originals/Fintro/*.csv` once into `data/incoming/`. All rows are already known, so
+nothing goes to Firefly; the 16 files (all distinct, checked) go into `originals/` and into
+Forgejo. Then check `git -C archive log --stat` (read-only) and the repo in Forgejo. Bash ignores
+Argenta's xlsx and pdf until plan 02 step 1, so those stay in `bank-csv-originals/` until the
+reload of plan 02 §4. The only commit is marking the step done.
 
-### Step 6 — Documentation
+### Step 7 — Documentation
 
 - **AGENTS.md**: "Idle cost" (the push flag also counts as work); "Key Directories" (`archive/`,
   `failed-rows/`, no `processed/`, no `bank-csv-originals/`); file names; "Lint" and "Firefly III
   Import" (paths in `failed-rows/`, retrying as in §3.7); "Start Over" becomes `start-over.bash`:
   what it does, when, and what it does not restore (token, one-time setup); conflicts as in §3.8;
-  the setup of §5 (moves to the checklist of plan 01 step 6 later); "Restore on a new server"
+  the setup of step 2 (moves to the checklist of plan 01 step 6 later); "Restore on a new server"
   (Firefly + checklist, feeder code, `git clone` of the archive into `archive/`, `app.env`,
   `start-over.bash`); exit 94; the hard rule "Rebuild from scratch" without "being built".
 - **architectural_patterns.md**: §2 and §8 (original → archive, exit 94), §10 (archive names, run id
@@ -317,40 +368,29 @@ until the reload of plan 02 §4.
 - **Fintro README**: "Export" (originals in the archive).
 - Regression command: see plan 01 step 4.
 
-## 5. Once, by hand (you, on the server)
+## 5. Testing
 
-Before step 5. At execution Claude gives the exact commands (its server access is read-only,
-AGENTS.md "Server access"); you paste them in your root shell on the server. Every command that
-writes in the feeder folder or the cron user's home runs as that user (`sudo -u <cron user> …`),
-so the key, `archive/` and its `.git/` belong to the cron user, not to root.
-1. Forgejo: create the private repo `firefly-iii-feeder-archive`.
-2. A key for the cron user in its second home dir (`homedir-ds`, survives a TrueNAS update), with
-   an ssh config holding the `forgejo` alias; its public key as a deploy key **with write
-   access** to that repo only.
-3. `git init` in `archive/`, with in `.git/config`: `core.sshCommand` pointing to that config,
-   `user.name`/`user.email` of the private Forgejo identity, `origin` =
-   `git@forgejo:<owner>/firefly-iii-feeder-archive.git`.
-4. Locally: `archive` in the `ignore` of `.vscode/sftp.json`.
-
-## 6. Testing
-
-1. Desktop, throwaway copy (AGENTS.md, testing a change to `firefly-iii-feeder.bash`), with an
-   `archive/` holding an empty git repo and a local bare repo as `origin`: a Fintro export, the
-   same once more, an overlapping one, an unknown file, a simulated crash; check what is in
-   `originals/`, `unprocessed/` and the commits. Push to an unreachable remote → one alert, flag,
-   the next run pushes.
-2. `start-over.bash` in the same copy with the wipe loops stubbed: order in `incoming/`, run ids in
-   the archive names unchanged, nothing twice in the archive, an original corrected by hand stays
-   one file.
-3. Server: step 5, then check `git -C archive log` and the repo in Forgejo.
+1. Steps 3 and 4 — desktop, throwaway copy (AGENTS.md, testing a change to
+   `firefly-iii-feeder.bash`), with an `archive/` holding an empty git repo and a local bare repo
+   as `origin` (for step 3: an `archive/` without `.git/`): a Fintro export, the same once more, an
+   overlapping one, an unknown file, a simulated crash; check what is in `originals/`,
+   `unprocessed/` and the commits. Push to an unreachable remote → one alert, flag, the next run
+   pushes.
+2. Step 5: `start-over.bash` in the same copy, with a `config/app.env` whose `FIREFLY_URL` points
+   to a local stub (a few lines of `python3 http.server` that answer `DELETE` with `504` once,
+   then `204`; and one run with `401`, which must stop the script). Check: refused as another
+   user than the folder's owner (on the desktop by temporarily expecting another owner); order
+   in `incoming/`; run ids in the archive names unchanged; nothing twice in the archive; an
+   original corrected by hand stays one file.
+3. Step 6 on the server, then check `git -C archive log` and the repo in Forgejo.
 4. The real reload with `start-over.bash` is the one of plan 02 §4.
 5. Before every commit: scan the staged diff for IBAN-shaped strings and real names (public repo).
 
-## 7. Consequences for the other plans
+## 6. Consequences for the other plans
 
 - **Plan 01**: §1.6 and step 5 — the accounts file is `archive/accounts.yaml`, edited through the
   share, applied as soon as it changes (idle test `-nt`, builtin); the SFTP route is dropped.
-  Step 4 — the regression test reads `archive/originals/**`. Step 6 — the setup of §5 in the
+  Step 4 — the regression test reads `archive/originals/**`. Step 6 — the setup of step 2 in the
   checklist.
 - **Plan 02**: §1.2 — the card's paying account in `accounts.yaml`, not in `app.env`. Step 1 — an
   xlsx or pdf the feeder cannot read yet goes to `unprocessed/`. §4 — the reload is
@@ -358,7 +398,7 @@ so the key, `archive/` and its `.git/` belong to the cron user, not to root.
 - **Finance repo** (private): the accounts file is no longer there but in the archive. Its
   classification tool, once built, must be able to reapply its work after a reload (§1.3).
 
-## 8. Open
+## 7. Open
 
 - Forgejo is not yet in the replication to truenas-backup (todo in sync-truenas-servers): until
   then archive and Forgejo are on one machine, with the hourly snapshots of `app-ds`.

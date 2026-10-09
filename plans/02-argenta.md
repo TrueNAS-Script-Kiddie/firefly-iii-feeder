@@ -293,7 +293,7 @@ after both plans; it also gives existing transactions the changes of plan 01.
    Mastercard (§1.3, `paid_from` §1.2, opening balance §1.7), term deposit (§1.4), the Rabobank
    accounts with their correction booking (plan 01 §1.8). The xlsx exports have no balance
    column: the Argenta opening balance comes from the Argenta app or an account statement.
-3. `./start-over.bash` (plan 00): wipes Firefly (also the expense/revenue accounts with Argenta
+3. `start-over.bash` as the cron user (plan 00 step 5): wipes Firefly (also the expense/revenue accounts with Argenta
    and Rabobank IBANs) and reloads everything in the archive; the accounts file is applied before
    the first import.
 4. Right after it, once: the originals in `bank-csv-originals/Argenta/` (with `Mastercard/<year>/`)
