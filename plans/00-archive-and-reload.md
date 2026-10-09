@@ -1,0 +1,366 @@
+# Plan 00 — Archive and starting over
+
+Status: **approved, not started.** To be carried out before [plan 01](01-core-fintro-firefly.md)
+step 4 (its steps 0–3 are done) and before [plan 02](02-argenta.md). Examples are made up
+(public repo).
+
+Goal: you drop an export in `data/incoming/` and need to do nothing else. Everything needed to
+fill Firefly again from zero comes under version control in private Forgejo by itself, and
+starting over is one command.
+
+Hard requirement for every step: **an idle run stays free** (AGENTS.md "Idle cost"). Everything
+below runs only when there is work; the only new idle test is a builtin `[[ -e ]]` (step 3).
+
+## 1. Requirement
+
+Becomes a hard rule in AGENTS.md (step 1):
+
+> What the feeder puts into Firefly (own accounts and transactions) is derived from the input.
+> Wiping it and loading it again must always be possible, with one command, and gives the result
+> of the current code. After every structural change to the feeder or to Firefly, that is the
+> normal way to give old transactions the new shape.
+
+1. All input is in the archive repo; `data/` and the feeder's part of Firefly contain nothing
+   that cannot be remade.
+2. Fix nothing by hand in `data/` or in Firefly. A fix goes into the parser, the config or the
+   accounts file; the only hand fix to input is one in the archive itself (§3.8).
+3. Classification is outside the scope: a wipe keeps rules, categories and tags in Firefly but
+   removes them from the transactions. Reapplying them is a requirement for the finance tool,
+   once it is built.
+
+## 2. Decisions
+
+1. ✅ **Archive repo on the server**: folder `archive/` in the feeder folder, its own git repo,
+   remote a private repo `firefly-iii-feeder-archive` on Forgejo. Git runs on TrueNAS itself (a
+   host binary, survives updates): the exports arrive there, so nothing travels back and forth to
+   the desktop. Not in the public repo (`.gitignore`), not in the SFTP watcher (`ignore`).
+2. ✅ **Everything dropped in `incoming/` ends up in the archive**, also what the feeder cannot
+   process: a rejected export may be real bank data the bank no longer provides later.
+   ```
+   archive/
+     originals/<bank>/<account>/<run>-<first>_<last>-<sha8>.<ext>   processed
+     unprocessed/<run>-<source name>                                not (yet) processed
+     accounts.yaml                                                  own accounts (plan 01 step 5)
+   ```
+   - `originals/`: Python finished the file (success, partial, all_failed, all_full_duplicates,
+     all_filtered), however many rows succeeded.
+   - `unprocessed/`: rejected (unknown bank, empty, all rows invalid, several accounts), crashed
+     (exit 99, or bash exit 1/unknown), or a critical move failed (92–97). The reason is in the
+     alert and the log, not in the name.
+3. ✅ **`<run>` = when the file arrived**, and it stays that: a file whose name already starts with
+   a run id (a copy from the archive) keeps that run id. A reload puts the files back in that
+   order, so with the same outcome.
+4. ✅ **`<sha8>`** = start of the SHA-256 of the export as it arrived. A file is not archived again
+   when its account folder already holds a file with the same content, or with the same `<sha8>`
+   in its name (the same export, since corrected by hand, §3.8). A file that lands in
+   `originals/` is removed from `unprocessed/` if it was there too.
+5. ✅ **Overlap is no problem.** You request exports per period yourself; overlapping rows are
+   then in the archive more than once, and the duplicate index deduplicates them at every
+   (re)load.
+6. ✅ **`data/processed/` goes away**, **`data/failed/` becomes `data/failed-rows/`** and holds
+   only rows (`-normalize-failed`, `-duplicate-failed`, `-import-failed`). Everything in `data/`
+   is then disposable.
+7. ✅ **Git after every run with work**: `git add -A`, commit, push. If the push fails (Forgejo
+   unreachable), the commit stays local and `data/archive-push-pending.flag` makes every next
+   minute push again; one alert per outage.
+8. ✅ **Conflict = a hand fix in the archive.** When the bank rewrote a row (same key, other
+   fields), the first version wins and the new one fails with an alert (as now). Fix: in the
+   **older** export in `archive/originals/`, change the row to the new version or delete it, then
+   `start-over.bash`. Git keeps what the bank originally gave. Not when a newer export also holds
+   the "error" (Fintro's misprinted rate, Fintro README "Quirks"): that export would then cause
+   the conflict.
+9. ✅ **`start-over.bash` does not block** on rejected files: they are in the archive and go back
+   in with the rest. A row problem can be solved long after a reload.
+10. ✅ **What is only in `config/app.env` must be recreatable without git**: `FIREFLY_URL` and
+    `FIREFLY_TOKEN` (create a new token in Firefly). Everything else a reload needs belongs in the
+    archive; hence plan 02's `ARGENTA_MASTERCARD_PAID_FROM_IBAN` moves into `accounts.yaml`.
+11. ✅ **`bank-csv-originals/` goes away** once everything in it is in the archive: Fintro at step 5
+    below, Argenta at the reload of plan 02 §4. Also for testing: the regression test then reads
+    the archive, with the same overlap cases.
+12. ✅ **One feeder at a time** (truenas-master only); the archive has one writer.
+
+## 3. What happens to files and rows
+
+### 3.1 What stays, what is disposable
+
+```mermaid
+flowchart LR
+    subgraph KEEP["archive/ — git, pushed to private Forgejo"]
+        OR["originals/#lt;bank#gt;/#lt;account#gt;/"]
+        UN["unprocessed/"]
+        AC["accounts.yaml"]
+    end
+    subgraph DISP["data/ — disposable, can be remade"]
+        IN[incoming/] --> NO[normalized/] --> IM[imported/]
+        IX[duplicate-index/]
+        FR[failed-rows/]
+        LO[logs/]
+    end
+    IN -->|finished| OR
+    IN -->|rejected, crashed| UN
+    NO --> FF[(Firefly)]
+    AC -->|applied before every import| FF
+```
+
+### 3.2 One file
+
+```mermaid
+flowchart TD
+    F[file in incoming/] --> P{Python finishes it?}
+    P -->|"no: unknown bank, empty, all rows invalid,<br/>several accounts, crash, move failed"| U{same content already<br/>in unprocessed/?}
+    U -->|yes| D1[copy dropped]
+    U -->|no| UN["archive/unprocessed/#lt;run#gt;-#lt;source name#gt;<br/>+ alert"]
+    P -->|yes| ROW[every row: §3.3]
+    ROW --> H{same content or same sha8<br/>already in the account folder?}
+    H -->|yes| D2[copy dropped]
+    H -->|no| OR["archive/originals/#lt;bank#gt;/#lt;account#gt;/<br/>#lt;run#gt;-#lt;first#gt;_#lt;last#gt;-#lt;sha8#gt;.#lt;ext#gt;<br/>(and removed from unprocessed/)"]
+```
+
+### 3.3 One row in the normalizer (unchanged)
+
+```mermaid
+flowchart TD
+    R[row] --> FI{filter<br/>e.g. status not Geaccepteerd}
+    FI -->|filtered out| G[counted in the log, nothing else]
+    FI --> V{cells valid?}
+    V -->|no| NF1["failed-rows/…-normalize-failed.csv<br/>not in the index"]
+    V -->|yes| K{duplicate key<br/>in the account's index?}
+    K -->|no: new| N{normalize_row succeeds?}
+    K -->|yes, all fields equal| ID[identical: skipped]
+    K -->|yes, fields differ| CO["conflict: failed-rows/…-duplicate-failed.csv<br/>+ alert; Firefly keeps the first version (§3.8)"]
+    N -->|yes| OK["normalized/ + index"]
+    N -->|no| NF2["failed-rows/…-normalize-failed.csv<br/>not in the index"]
+```
+
+A row enters the index only once it is normalized; a row that failed is retried as soon as the
+same export arrives again (§3.7).
+
+### 3.4 One row in the importer (unchanged)
+
+```mermaid
+flowchart TD
+    R[row from normalized/] --> T{counterparty is an<br/>own account?}
+    T -->|yes| C{transfer already in Firefly?<br/>same accounts, amount, ±7 days}
+    C -->|yes| CL[claimed: nothing new]
+    C -->|no| P
+    T -->|no| P[POST to Firefly]
+    P -->|200| NEW[new transaction]
+    P -->|422 duplicate hash| AP[already present: nothing new]
+    P -->|other error| IF["failed-rows/…-import-failed.csv<br/>already in the index"]
+```
+
+### 3.5 Overlapping exports
+
+Made up: three exports of one account, requested and dropped in this order.
+
+```mermaid
+sequenceDiagram
+    participant B as incoming/
+    participant N as normalizer + index
+    participant A as archive
+    participant F as Firefly
+    B->>N: A: 2015–2024 (1000 rows)
+    N->>F: 1000 new
+    N->>A: A kept
+    B->>N: B: 2020–2022 (300 rows, all seen)
+    Note over N: 300 identical, skipped
+    N->>A: B kept (0 new rows, still real bank data)
+    B->>N: C: 2023–2026 (400 rows, 150 seen)
+    Note over N: 150 identical, 250 new
+    N->>F: 250 new
+    N->>A: C kept
+    B->>N: C once more (byte-identical)
+    Note over N: 400 identical
+    N--xA: not kept: same content already there
+```
+
+Firefly: 1250 transactions; the archive: A, B and C.
+
+### 3.6 Starting over
+
+```mermaid
+sequenceDiagram
+    actor U as you (server)
+    participant S as start-over.bash
+    participant F as Firefly
+    participant D as data/
+    participant A as archive
+    participant C as cron
+    U->>S: ./start-over.bash, type WIPE
+    S->>S: take the lock (waits for a running run)
+    S->>A: commit pending changes (e.g. a fix, §3.8)
+    S->>F: wipe transactions + counterparties, purge
+    S->>D: data/ → data-before-start-over/ (previous one replaced),<br/>files waiting in incoming/ go back in
+    S->>D: originals/** and unprocessed/* → incoming/ (names start with #lt;run#gt;)
+    S->>S: release the lock
+    loop every minute, oldest #lt;run#gt; first
+        C->>F: apply accounts.yaml (from plan 01 step 5)
+        C->>D: normalize + import (§3.3, §3.4)
+        C--xA: nothing new, except a rejected file that now succeeds
+    end
+```
+
+Files in `normalized/` are dropped: their original is in the archive. A rejected file that still
+fails alerts again and stays in `unprocessed/`.
+
+### 3.7 Retrying a row or a file
+
+```mermaid
+flowchart TD
+    subgraph NORM["row failed in the normalizer"]
+        A1["failed-rows/…-normalize-failed.csv<br/>not in the index"] --> A2[fix the parser]
+        A2 --> A3["copy the original from archive/originals/<br/>to incoming/"]
+        A3 --> A4[rest identical, this row new → Firefly]
+    end
+    subgraph IMP["Firefly refused the row"]
+        B1["failed-rows/…-import-failed.csv<br/>already in the index"] --> B2[fix the cause]
+        B2 --> B3["move that file to normalized/"]
+        B3 --> B4[sent again → Firefly]
+    end
+    subgraph UNP["file rejected"]
+        C1["archive/unprocessed/…"] --> C2[fix config or parser]
+        C2 --> C3["drag it to incoming/ through the share"]
+        C3 --> C4["→ originals/; git records a move"]
+    end
+    A4 -.-> Z[or: start-over.bash, then everything goes again]
+    B4 -.-> Z
+    C4 -.-> Z
+```
+
+### 3.8 Conflict: the bank rewrote a row
+
+```mermaid
+flowchart TD
+    C["alert: conflict<br/>Firefly has the old version, the new one is in duplicate-failed"] --> Q{does a newer export<br/>also hold the old version?}
+    Q -->|yes: not a rewrite| P[check the parser or the duplicate key]
+    Q -->|no| E["through the share: in the older export in archive/originals/<br/>change the row to the new version, or delete it"]
+    E --> S[start-over.bash]
+    S --> G["git: the fix is a commit; history shows what the bank gave"]
+```
+
+## 4. Steps (order = commits)
+
+Every step: `pre-commit`, regression test (zero differences: nothing here changes a row).
+"Deploy = save" (AGENTS.md): save steps 2 and 3 only while `data/incoming/` and
+`data/normalized/` are empty and no flag is pending, and all files of the step in quick
+succession.
+
+### Step 1 — Requirement in AGENTS.md
+
+The hard rule of §1, next to "Idle cost" and "Normalization principle", linking to this plan.
+"Start Over" and the duplicate-hash gotcha point to the rule; the rest of AGENTS.md describes
+current behaviour and follows in step 6.
+
+### Step 2 — Archive in the normalizer
+
+1. `finalize` (block 2, "original CSV move"): finished → `archive/originals/…`, else →
+   `archive/unprocessed/…`, with the checks of §2.4 (`hashlib`). Exit 94 then means "original not
+   archived"; the compensating move goes to `unprocessed/`.
+2. `build_paths` / `output_paths`: no `processed_*` any more; `failed_dir` → `failed-rows`.
+3. Take the run id from the source name when it starts with one (§2.3); `describe_output` still
+   uses the new run id for `data/` (unique per run), only the archive name uses the old one.
+4. Bash: the fallback moves (exit 1, 92–97, unknown) → `archive/unprocessed/<run>-<name>`;
+   `FAILED_DIR` → `data/failed-rows`; `mkdir -p` also for `archive/originals` and
+   `archive/unprocessed`.
+5. Importer: `-import-failed.csv` to `data/failed-rows/`.
+6. `.gitignore`: `archive/`.
+
+### Step 3 — Git in bash
+
+1. After the importer, still under the lock, only in a run with work: if `archive/.git` exists,
+   `git -C archive add -A`, a commit when something changed (message: the added, moved and changed
+   paths), then `git push`.
+2. Push fails → `data/archive-push-pending.flag`, alert only when the flag is new. The idle test
+   gets `|| [[ -e "${ARCHIVE_PUSH_FLAG}" ]]` (builtin); a run with only that flag just pushes.
+   Push succeeded → flag removed.
+3. `archive/.git` missing → alert in every run with work ("archive not under git": the setup of §5
+   is missing); the files still go into `archive/`.
+4. Measure idle again, ≤ 2 ms.
+
+### Step 4 — `start-over.bash`
+
+In the feeder folder, no arguments, as the cron user: from the root shell
+`sudo -u <cron user> ./start-over.bash`. Order as in §3.6:
+1. Refuses to run as anyone but the owner of the feeder folder (so not as root), before touching
+   anything: root-owned files in `data/` or `archive/` would break the cron.
+2. `flock` on `.process.lock`, waiting, so a running run finishes first.
+3. Shows the number of files in `originals/` and `unprocessed/`, asks for `WIPE`.
+4. Commits pending changes in the archive ("before start-over").
+5. Wipes and purges Firefly with the loops of AGENTS.md "Start Over", but stops (with a message)
+   on any code other than `504` and `204` instead of repeating forever.
+6. `data/` → `data-before-start-over/` (the previous one is removed); files waiting in
+   `data/incoming/` go back into the new `data/incoming/`.
+7. `archive/originals/**` and `archive/unprocessed/*` → `data/incoming/` (copies, flat folder).
+8. Releases the lock and says: cron does the rest (~1 hour), alerts by mail.
+
+### Step 5 — Fintro into the archive (you, on the server)
+
+After the setup of §5: `bank-csv-originals/Fintro/*.csv` once into `data/incoming/` (as the cron
+user, see §5). All rows are
+already known, so nothing goes to Firefly; the 16 files go into `originals/` and into Forgejo.
+Bash ignores Argenta's xlsx and pdf until plan 02 step 1, so those stay in `bank-csv-originals/`
+until the reload of plan 02 §4.
+
+### Step 6 — Documentation
+
+- **AGENTS.md**: "Idle cost" (the push flag also counts as work); "Key Directories" (`archive/`,
+  `failed-rows/`, no `processed/`, no `bank-csv-originals/`); file names; "Lint" and "Firefly III
+  Import" (paths in `failed-rows/`, retrying as in §3.7); "Start Over" becomes `start-over.bash`:
+  what it does, when, and what it does not restore (token, one-time setup); conflicts as in §3.8;
+  the setup of §5 (moves to the checklist of plan 01 step 6 later); "Restore on a new server"
+  (Firefly + checklist, feeder code, `git clone` of the archive into `archive/`, `app.env`,
+  `start-over.bash`); exit 94; the hard rule "Rebuild from scratch" without "being built".
+- **architectural_patterns.md**: §2 and §8 (original → archive, exit 94), §10 (archive names, run id
+  of arrival), §11 (bash fallback → `unprocessed/`, git after the run, push flag in the idle test),
+  §13 (`failed-rows/`).
+- **README.md**: overview, project structure, "VS Code SFTP Sync" (`archive/` in `ignore`).
+- **Fintro README**: "Export" (originals in the archive).
+- Regression command: see plan 01 step 4.
+
+## 5. Once, by hand (you, on the server)
+
+Before step 5. At execution Claude gives the exact commands (its server access is read-only,
+AGENTS.md "Server access"); you paste them in your root shell on the server. Every command that
+writes in the feeder folder or the cron user's home runs as that user (`sudo -u <cron user> …`),
+so the key, `archive/` and its `.git/` belong to the cron user, not to root.
+1. Forgejo: create the private repo `firefly-iii-feeder-archive`.
+2. A key for the cron user in its second home dir (`homedir-ds`, survives a TrueNAS update), with
+   an ssh config holding the `forgejo` alias; its public key as a deploy key **with write
+   access** to that repo only.
+3. `git init` in `archive/`, with in `.git/config`: `core.sshCommand` pointing to that config,
+   `user.name`/`user.email` of the private Forgejo identity, `origin` =
+   `git@forgejo:<owner>/firefly-iii-feeder-archive.git`.
+4. Locally: `archive` in the `ignore` of `.vscode/sftp.json`.
+
+## 6. Testing
+
+1. Desktop, throwaway copy (AGENTS.md, testing a change to `firefly-iii-feeder.bash`), with an
+   `archive/` holding an empty git repo and a local bare repo as `origin`: a Fintro export, the
+   same once more, an overlapping one, an unknown file, a simulated crash; check what is in
+   `originals/`, `unprocessed/` and the commits. Push to an unreachable remote → one alert, flag,
+   the next run pushes.
+2. `start-over.bash` in the same copy with the wipe loops stubbed: order in `incoming/`, run ids in
+   the archive names unchanged, nothing twice in the archive, an original corrected by hand stays
+   one file.
+3. Server: step 5, then check `git -C archive log` and the repo in Forgejo.
+4. The real reload with `start-over.bash` is the one of plan 02 §4.
+5. Before every commit: scan the staged diff for IBAN-shaped strings and real names (public repo).
+
+## 7. Consequences for the other plans
+
+- **Plan 01**: §1.6 and step 5 — the accounts file is `archive/accounts.yaml`, edited through the
+  share, applied as soon as it changes (idle test `-nt`, builtin); the SFTP route is dropped.
+  Step 4 — the regression test reads `archive/originals/**`. Step 6 — the setup of §5 in the
+  checklist.
+- **Plan 02**: §1.2 — the card's paying account in `accounts.yaml`, not in `app.env`. Step 1 — an
+  xlsx or pdf the feeder cannot read yet goes to `unprocessed/`. §4 — the reload is
+  `start-over.bash`, and fills the archive with Argenta; after that `bank-csv-originals/` goes away.
+- **Finance repo** (private): the accounts file is no longer there but in the archive. Its
+  classification tool, once built, must be able to reapply its work after a reload (§1.3).
+
+## 8. Open
+
+- Forgejo is not yet in the replication to truenas-backup (todo in sync-truenas-servers): until
+  then archive and Forgejo are on one machine, with the hourly snapshots of `app-ds`.
+- At execution: does the share write into `archive/` as the cron user? If not, `safe.directory`
+  or group permissions, so git and the feeder can read and move each other's files.

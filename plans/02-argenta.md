@@ -1,8 +1,9 @@
 # Plan 02 — Argenta
 
-Status: **approved; to be carried out after [plan 01](01-core-fintro-firefly.md)**, which
-delivers the file names, `interest_date`, foreign currency, the lookup of own accounts and the
-accounts file. Examples are made up (public repo); real rows stay in the terminal.
+Status: **approved; to be carried out after [plan 00](00-archive-and-reload.md)** (archive,
+`start-over.bash`) **and [plan 01](01-core-fintro-firefly.md)** (file names, `interest_date`,
+foreign currency, the lookup of own accounts, the accounts file). Examples are made up (public
+repo); real rows stay in the terminal.
 
 Hard requirement for every step: **an idle run stays free** (AGENTS.md "Idle cost").
 
@@ -53,9 +54,10 @@ Established in the data:
 
 1. ✅ **Mastercard as its own Firefly account** (kind `credit_card`), every purchase separately.
 2. ✅ **The current account pays off the card.** The PDF does not name that IBAN and every file
-   is processed separately, so the program must be given it: `ARGENTA_MASTERCARD_PAID_FROM_IBAN`
-   in the server-only `config/app.env` (not in git). Without that value the repayment line
-   fails.
+   is processed separately, so the program must be given it: a field `paid_from` (the paying
+   IBAN) on the card account in `archive/accounts.yaml`, so a reload has it too (plan 00 §2.10);
+   it is added to the template `config/accounts.example.yaml`. Whether the normalizer or the
+   importer reads it is settled at execution. Without that value the repayment line fails.
 3. ✅ **Card account in the accounts file** (plan 01 step 5): IBAN = the BCC collection number
    from the current-account export (so `Debet ten voordele van BCC` becomes a transfer), account
    number = customer reference of the statement.
@@ -84,18 +86,18 @@ Established in the data:
 
 ## 2. Data flow and reading
 
-Folders stay what they are; only `incoming/`, `processed/` and (after a crash) `failed/` also
-receive `.xlsx`/`.pdf`. Names: plan 01 step 1.
+Folders stay what they are (plan 00); only `incoming/` and the archive (`originals/`,
+`unprocessed/`) also receive `.xlsx`/`.pdf`. Names: plan 01 step 1, plan 00 §2.
 
 ```mermaid
 flowchart LR
     IN["incoming/<br/>csv · xlsx · pdf"] -->|normalizer| NO["normalized/<br/>csv"]
     NO -->|importer| IM["imported/<br/>csv"]
     NO -.->|everything to Firefly| FF[(Firefly III)]
-    IN -->|original| PR["processed/<br/>own extension"]
-    IN -.->|"rows that fail<br/>(normalizer)"| FA["failed/<br/>csv"]
+    IN -->|original| OR["archive/originals/<br/>own extension"]
+    IN -.->|"rows that fail<br/>(normalizer)"| FA["failed-rows/<br/>csv"]
     NO -.->|"rows Firefly refuses"| FA
-    IN -.->|"whole file after a crash<br/>(own extension)"| FA
+    IN -.->|"whole file rejected or crashed<br/>(own extension)"| UN["archive/unprocessed/"]
 ```
 
 No `converted/` intermediate step: the normalizer reads an xlsx/pdf in memory into the same rows
@@ -161,6 +163,8 @@ up as "new in this version".
      xlsx complete = zip end record (`PK\x05\x06`) in the last 64 KB; PDF complete = `%%EOF` in
      the last 1 KB. With `tail -c`, only when there is a file.
    - Repeat the idle measurement, ≤ 2 ms.
+   - From this step on, an xlsx or pdf without a config is rejected into `archive/unprocessed/`
+     (plan 00) instead of being ignored, with an alert per file.
 2. `load_csv_rows` → `load_rows(path, bank_configs)`, chooses by extension:
    - `.csv`: unchanged.
    - `.xlsx`: new `engine/core/xlsx_reader.py`, stdlib. First sheet, row 1 = header. Cell with a
@@ -269,12 +273,12 @@ Mededeling:       USD SAINT-VAAST        08-05-17 13:01
 In the structure of plan 01 step 0:
 - **`engine/banks/argenta/README.md`** (fixed headings) for the accounts and the card statements:
   export, columns, unique row, field mapping, parsing rules, quirks (dummy IBAN, non-unique
-  reference, own IBAN on interest, BCC settlement, missing months = no activity),
-  `ARGENTA_MASTERCARD_PAID_FROM_IBAN`, checks. `argenta/CLAUDE.md` with `@README.md`,
+  reference, own IBAN on interest, BCC settlement, missing months = no activity), `paid_from`
+  in the accounts file, checks. `argenta/CLAUDE.md` with `@README.md`,
   `argenta_mastercard/CLAUDE.md` with `@../argenta/README.md`.
 - **AGENTS.md / README**: `data/incoming/` accepts csv, xlsx, pdf; Argenta in the "Banks" table;
-  readers for non-CSV in "Adding a New Bank"; regression and reload commands (`Fintro/`,
-  `Argenta/`, `Argenta/Mastercard/<year>/`; xlsx, pdf).
+  readers for non-CSV in "Adding a New Bank"; the regression command covers xlsx and pdf in
+  `archive/originals/`.
 - **`docs/output-contract.md`**: Argenta's transaction types and unique keys.
 - This plan disappears; the lasting facts are then in the files above.
 
@@ -284,20 +288,20 @@ Needed because the Fintro rows to Argenta and Rabobank (point 0.12, plan 01 §1.
 expenses/income: without reloading, the Argenta import adds a transfer → **counted twice**. Once,
 after both plans; it also gives existing transactions the changes of plan 01.
 
-1. Wait until `data/incoming/` and `data/normalized/` are empty.
-2. Wipe Firefly following AGENTS.md "Start Over" (also wipes the expense/revenue accounts with
-   Argenta and Rabobank IBANs).
-3. Complete and apply the accounts file (plan 01 step 5): Argenta current and savings, Argenta
-   Mastercard (§1.3; opening balance from §1.7), term deposit (§1.4), the Rabobank accounts with
-   their correction booking (plan 01 §1.8). The xlsx exports have no balance column: the Argenta
-   opening balance comes from the Argenta app or an account statement.
-   ⏰ Ask about §1.7 first (older card statements).
-4. `ARGENTA_MASTERCARD_PAID_FROM_IBAN` in `config/app.env` (§1.2).
-5. Empty `data/` and put all originals back: `Fintro/`, `Argenta/` and
-   `Argenta/Mastercard/<year>/` (command from step 5).
-6. Check: the Firefly balance of every Argenta account = balance in the Argenta app today; card
+1. ⏰ Ask about §1.7 first (older card statements).
+2. Complete `archive/accounts.yaml` (plan 01 step 5): Argenta current and savings, Argenta
+   Mastercard (§1.3, `paid_from` §1.2, opening balance §1.7), term deposit (§1.4), the Rabobank
+   accounts with their correction booking (plan 01 §1.8). The xlsx exports have no balance
+   column: the Argenta opening balance comes from the Argenta app or an account statement.
+3. `./start-over.bash` (plan 00): wipes Firefly (also the expense/revenue accounts with Argenta
+   and Rabobank IBANs) and reloads everything in the archive; the accounts file is applied before
+   the first import.
+4. Right after it, once: the originals in `bank-csv-originals/Argenta/` (with `Mastercard/<year>/`)
+   into `data/incoming/`, as the cron user (AGENTS.md "Server access"). They are imported and land in the archive; after that
+   `bank-csv-originals/` can go (plan 00 §2.11).
+5. Check: the Firefly balance of every Argenta account = balance in the Argenta app today; card
    balance = last `Nieuw saldo`; both Rabobank accounts end on 0; every own transfer appears
-   exactly once.
+   exactly once; nothing left in `archive/unprocessed/`.
 
 Takes about an hour (~14,500 Fintro rows in batch + ~750 Argenta rows).
 
@@ -307,9 +311,5 @@ Takes about an hour (~14,500 Fintro rows in batch + ~750 Argenta rows).
 2. Argenta: normalize all 311 xlsx rows and all statement lines without error, or the error is
    explained and the parser adjusted.
 3. Server: one xlsx and one PDF via `data/incoming/`, check in `data/normalized/`,
-   `data/failed/`, `data/logs/`; importer with `--dry-run`.
+   `data/failed-rows/`, `data/logs/`; importer with `--dry-run`.
 4. Before every commit: scan the staged diff for IBAN-like strings and real names (public repo).
-
-## 6. Later
-
-- Rename the originals in `bank-csv-originals/` consistently (the feeder needs no name, §1.10).

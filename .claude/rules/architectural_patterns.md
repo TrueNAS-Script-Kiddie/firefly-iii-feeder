@@ -91,8 +91,9 @@ cut from the remaining text, so a later pattern cannot match it again, and
 anything left at the end raises `ValueError`.
 
 **Phase 2 — Reconcile, reformat, assemble.** No parsing at this stage; only
-cross-source decisions, cosmetic replacement, and final assembly of the 20
-`NORMALIZED_FIELDNAMES` defined in [engine/process_csv.py](../../engine/process_csv.py).
+cross-source decisions, cosmetic replacement, and final assembly of the
+`NORMALIZED_FIELDNAMES` defined in [engine/process_csv.py](../../engine/process_csv.py)
+(all but `row_key`, which `process_csv` adds).
 
 The patterns and their order are bank-specific: see the bank's README (Fintro:
 "Parsing `Details`").

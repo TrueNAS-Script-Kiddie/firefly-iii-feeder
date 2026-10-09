@@ -34,6 +34,20 @@ changing the script
 cd /tmp && time (for i in {1..30}; do bash -s < <app-ds>/firefly-iii-feeder/firefly-iii-feeder.bash; done)
 ```
 
+## Rebuild from scratch (hard rule)
+
+What the feeder puts into Firefly (own accounts and transactions) is derived from the input.
+Wiping it and loading it again must always be possible, with one command, and gives the result
+of the current code. After every structural change to the feeder or to Firefly, that is the
+normal way to give old transactions the new shape, not an emergency.
+
+- All input belongs in the private archive repo (being built:
+  [plans/00-archive-and-reload.md](plans/00-archive-and-reload.md)); `data/` and Firefly hold
+  nothing that cannot be remade.
+- Fix nothing by hand in `data/` or in Firefly: a fix goes into the parser, the config or the
+  accounts file. The only hand fix to input is one in the archive itself, where git keeps it.
+- Classification is outside this rule: a wipe keeps rules, categories and tags in Firefly but
+  removes them from the transactions; reapplying them is up to the private tool that owns it.
 ## Key Directories
 
 | Path | Purpose |
@@ -78,6 +92,15 @@ and also when Claude saves it. A change to the normalized columns, to file names
 `data/`, or to anything the importer reads must therefore be saved only while
 `data/incoming/` and `data/normalized/` on the server are empty and no
 `data/*.flag` is pending: check that first (read-only `ls`).
+
+## Server access
+
+AI agents only read on the server (`ls`, `cat`, `stat`: `data/` and the token live only
+there). Anything that writes — moving a file, a git command, `start-over.bash`, an install — is
+handed to the user as a plain command to paste. The user's shell there is root, while the cron
+job and every file in the feeder folder belong to the cron user. So a command that writes in the
+feeder folder runs as that user (`sudo -u <cron user> …`): a root-owned file in `data/` or
+`archive/` (git objects above all) breaks the next cron run.
 
 ## Running
 
@@ -251,12 +274,14 @@ Gotchas:
   included the batch flag, so a row imported per row and again in batch mode
   was stored twice.
 - Firefly's **duplicate hash covers every field** of the split (SHA-256 of the
-  whole request row, absent fields as null; only `batch_submission` is left out).
+  whole request row, absent fields as null; only `import_hash_v2`, `original_source`
+  and `batch_submission` are left out).
   So a change to what `build_split` sends makes an already imported row a second
   transaction when it is sent again: deploy such a change only while
   `data/normalized/` is empty, and never move a file from `data/imported/` back
   to `data/normalized/`. A re-dropped bank CSV is safe: the duplicate index
-  stops its rows before the importer.
+  stops its rows before the importer. To give rows already in Firefly the new
+  fields: Start Over.
 - **`enable_batch_processing` must be on** (Firefly admin configuration, set it
   in the GUI: the configuration API stores it as text, which Firefly ignores).
   While it is off, batch mode silently does the full per-row work.
@@ -296,6 +321,10 @@ root, through a passwordless sudo rule:
   rule or container gives one alert, and the flag keeps the follow-up pending.
 
 ## Start Over (full reload)
+
+The normal way to apply a structural change to what is already in Firefly
+(hard rule "Rebuild from scratch"). `start-over.bash` will do all of this in one
+command, from the archive (plan 00); until then, by hand as below.
 
 Rows already in the duplicate index never reach the parser again, so a parser
 change only affects new rows. To give already imported transactions the new
