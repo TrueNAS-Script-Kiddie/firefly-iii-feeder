@@ -264,11 +264,17 @@ Mededeling:       USD SAINT-VAAST        08-05-17 13:01
 
 ### Stap 5 — Documentatie
 
-AGENTS.md, README, architectural_patterns.md: `data/incoming/` aanvaardt csv, xlsx, pdf;
-lezers voor niet-CSV in "Adding a New Bank"; Argenta-regels en gotchas (dummy-IBAN,
-niet-unieke referentie, eigen IBAN bij interest, BCC-afrekening);
-`ARGENTA_MASTERCARD_PAID_FROM_IBAN` in `app.env`; regressie- en herlaadcommando's
-(`Fintro/`, `Argenta/`, `Argenta/Mastercard/<jaar>/`; xlsx, pdf).
+In de structuur van plan 01 stap 0:
+- **`engine/banks/argenta/README.md`** (vaste kopjes) voor de rekeningen én de kaartafschriften:
+  export, kolommen, unieke rij, veldtoewijzing, parseerregels, eigenaardigheden (dummy-IBAN,
+  niet-unieke referentie, eigen IBAN bij interest, BCC-afrekening, ontbrekende maanden =
+  geen activiteit), `ARGENTA_MASTERCARD_PAID_FROM_IBAN`, controles. `argenta/CLAUDE.md` met
+  `@README.md`, `argenta_mastercard/CLAUDE.md` met `@../argenta/README.md`.
+- **AGENTS.md / README**: `data/incoming/` aanvaardt csv, xlsx, pdf; Argenta in de tabel
+  "Banks"; lezers voor niet-CSV in "Adding a New Bank"; regressie- en herlaadcommando's
+  (`Fintro/`, `Argenta/`, `Argenta/Mastercard/<jaar>/`; xlsx, pdf).
+- **`docs/output-contract.md`**: Argenta's transactietypes en unieke sleutels.
+- Dit plan verdwijnt; de blijvende feiten staan dan in de bestanden hierboven.
 
 ## 4. Volledige herlaadbeurt (jij, op de server)
 

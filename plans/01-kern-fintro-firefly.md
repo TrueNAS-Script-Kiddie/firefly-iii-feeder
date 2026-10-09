@@ -47,6 +47,19 @@ draait pas als er werk is; na stap 1 wordt de idle-meting herhaald, ≤ 2 ms.
    bedragen komen uit de data en gaan in het rekeningbestand, niet in de repo.
    Afgewezen: twee rekeningen met per uitbetaling een afgeleide overschrijving spaar→zicht.
 
+9. ✅ **Documentatie: elk feit op één plek** (stap 0). Altijd geldend → AGENTS.md /
+   architectural_patterns.md (elke sessie ingeladen); per bank → `engine/banks/<bank>/README.md`
+   (alleen ingeladen als iemand aan die bank werkt); wat andere tools mogen gebruiken →
+   `docs/output-contract.md`. Persoonlijk (welke rekeningen, classificatie, rapportering) staat
+   in de privé-financerepo, die naar dit contract linkt; deze repo noemt die enkel als "een
+   privétool".
+10. ✅ **Unieke rijsleutel in Firefly**: `internal_reference` = `<rekening>|<duplicaatsleutel>`
+    (stap 3). `external_id` is de referentie van de bank en is niet altijd uniek (Argenta) of
+    bestaat niet (kaartafschriften); tools die een transactie terug moeten vinden (overrides van
+    de classificatie) gebruiken de rijsleutel.
+11. ✅ **Leningen als schuldrekening**: de beslissing ligt bij de privé-financerepo; deze repo
+    voert alleen uit wat daar beslist wordt (§5).
+
 ## 2. Wie laadt wat in Firefly
 
 Toetsvraag: **is het nodig om transacties correct te importeren?** Dan de feeder; anders de
@@ -66,6 +79,43 @@ financetool (privé-repo); wat eenmalig per server is of niet via de API kan: me
 
 Elke stap: `pre-commit`, regressietest. Wat een stap op Fintro mag veranderen, staat bij de
 stap; al het andere moet nul verschillen geven.
+
+### Stap 0 — Documentatie herschikken
+
+Eerst, zodat elke volgende stap meteen op de juiste plek documenteert. Alleen verhuizen en
+splitsen; geen nieuwe inhoud.
+
+```
+README.md                          mensen op GitHub: wat het is, starten, tabel "Banks" met links
+AGENTS.md                          altijd ingeladen: harde regels (idle-kost, normalisatieprincipe,
+                                   geen echte data), draaien, testen, importer, Firefly-checklist,
+                                   Start Over, een bank toevoegen; tabel "Banks" met links
+.claude/rules/architectural_patterns.md
+                                   altijd ingeladen: alleen de algemene architectuur
+docs/output-contract.md            waar andere tools op mogen rekenen
+engine/banks/<bank>/README.md      één per bank, vaste indeling (hieronder)
+engine/banks/<bank>/CLAUDE.md      één regel: @README.md
+config/accounts.example.yaml       legt het rekeningbestand zelf uit (stap 5)
+plans/NN-*.md                      tijdelijk (hieronder)
+```
+
+1. **Per bank `engine/banks/<bank>/README.md`**, vaste kopjes: Export (hoe je ze bij de bank
+   haalt, formaat), Kolommen, Unieke rij (duplicaatsleutel en waarom), Veldtoewijzing (bank →
+   intern → normalized), Parseerregels en wat expliciet wegvalt, Markers en conventies,
+   Eigenaardigheden, Controleren (`debug_row`, kruiscontroles). GitHub toont die README als je de
+   map opent. Claude Code laadt een `CLAUDE.md` in een submap pas in als het bestanden in die map
+   leest; met `@README.md` erin wordt de bankdocumentatie dus alleen ingeladen als het over die
+   bank gaat. Andere AI-tools vinden ze via de tabel "Banks" in AGENTS.md.
+2. **Fintro** krijgt de eerste: uit AGENTS.md "Fintro message markers" en de regel over de
+   tegenpartij `Fintro`; uit architectural_patterns de Fintro-details van §5 (twee bronnen) en §6
+   (de details-kolom ontleden). Daar blijft het algemene principe: twee bronnen vergelijken, falen
+   bij tegenspraak.
+3. **`docs/output-contract.md`**: per normalized veld wat het betekent; de woorden voor
+   transactietypes; markers; formaat van de notities; welke sleutel per bank uniek en stabiel is
+   (`row_key`, `external_id`); een korte lijst van wijzigingen, zodat een tool die erop rekent
+   weet wanneer hij moet aanpassen. Publiek, zodat de privé-financerepo ernaar kan linken.
+4. **Plannen zijn tijdelijk**: na uitvoering gaan de blijvende feiten naar de bestanden hierboven
+   en verdwijnt het plan (git bewaart het). AGENTS.md zegt dat in één regel.
 
 ### Stap 1 — Bestandsnamen in `data/`
 
@@ -140,6 +190,16 @@ herlaadbeurt (plan 02).
    uitgeschakelde munt van een rij wordt ingeschakeld (`POST /v1/currencies/{code}/enable`,
    in de API-specificatie 6.5.5) en gelogd; een munt die Firefly niet kent laat de rij falen
    (een munt aanmaken vraagt een naam en symbool, die verzint de feeder niet).
+5. Rijsleutel (§1.10): de normalizer schrijft een nieuw normalized veld `row_key` =
+   `<rekening>|<duplicaatsleutel>` (in `process_csv`, niet in `normalize_row`, dus geen verschil
+   in de regressietest); de importer stuurt het als `internal_reference`. Bij een overschrijving
+   tussen eigen rekeningen staat alleen de rijsleutel van de eerste kant in Firefly (zoals nu
+   met `external_id`); het contract (stap 0) zegt dat.
+
+Nagaan bij de uitvoering: hoort elk verstuurd veld bij Firefly's duplicaathash? Dan geven de
+nieuwe velden (`interest_date`, vreemde munt, `internal_reference`) een andere hash, en zou een
+bestand dat vóór deze stappen genormaliseerd werd bij opnieuw importeren dubbel komen. Tot de
+volledige herlaadbeurt (plan 02) dan geen oude bestanden opnieuw importeren.
 
 ### Stap 4 — Regressietest en `debug_row`
 
@@ -265,9 +325,11 @@ Firefly geen eigen rekening.
 
 ### Stap 6 — Documentatie
 
-AGENTS.md, README, architectural_patterns.md:
+In de structuur van stap 0 (AGENTS.md, README, architectural_patterns.md, Fintro-README,
+output-contract):
 - bestandsnamen in `data/` (ook architectural_patterns §10 "Timestamp-Everything");
-- `interest_date`, vreemde munt, munten inschakelen, eigen rekeningen op IBAN of rekeningnummer;
+- `interest_date`, vreemde munt, munten inschakelen, eigen rekeningen op IBAN of rekeningnummer,
+  `row_key` / `internal_reference` (ook in het contract);
 - regressiecommando recursief; generieke `debug_row`;
 - rekeningbestand: sjabloon, plaats op de server, SFTP en de Forgejo-optie;
 - nieuwe sectie **"Firefly setup (by hand, once per server)"**, alles op één plek (nu verspreid
@@ -290,6 +352,7 @@ AGENTS.md, README, architectural_patterns.md:
 
 ## 5. Later
 
-- **Leningen** (woonkrediet, kredieten) als schuldrekening: afbetalingen worden overschrijvingen
-  die de schuld verlagen in plaats van uitgaven. Vraagt een ontwerp voor kapitaal vs. interest.
+- **Leningen** als schuldrekening, als de privé-financerepo daartoe beslist: kind `loan` in het
+  rekeningbestand, afbetalingen als overschrijving naar die rekening. Kapitaal vs. interest
+  vraagt dan een eigen ontwerp.
 - In de bestandsnamen een korte rekeningnaam uit het rekeningbestand in plaats van de IBAN.
