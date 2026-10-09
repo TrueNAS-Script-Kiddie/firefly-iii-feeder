@@ -12,6 +12,12 @@ Runs unattended from a TrueNAS cron job.
 - **YAML** — per-bank configuration ([config/](config/))
 - **Dependencies** — Python stdlib + `pyyaml` only (no build step; the Firefly client uses `urllib`)
 
+## English only (hard rule)
+
+Everything in this public repo is English: code, comments, docs, plans, commit messages, file
+names. Only text that is the bank's own stays in its language: export column names, message
+patterns, and the transaction types the bank prints.
+
 ## Idle cost (hard rule)
 
 The cron job runs every minute, so an idle run must cost next to nothing. Until there is
