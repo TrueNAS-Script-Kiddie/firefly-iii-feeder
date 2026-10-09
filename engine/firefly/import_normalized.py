@@ -37,6 +37,7 @@ import subprocess
 import sys
 import time
 import traceback
+from collections.abc import Callable
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -86,7 +87,8 @@ RE_DUPLICATE = re.compile(r"Duplicate of transaction #(\d+)")
 TransferPool = dict[tuple[str, str, str], list[dict[str, Any]]]
 
 
-def clean_iban(value: str | None) -> str:
+def clean_identifier(value: str | None) -> str:
+    """IBAN or account number without spaces, upper case."""
     return (value or "").replace(" ", "").upper()
 
 
@@ -98,14 +100,56 @@ def money(value: str) -> str:
 # ---------------------------------------------------------------------------
 # Firefly state
 # ---------------------------------------------------------------------------
-def load_asset_accounts(client: FireflyClient) -> dict[str, dict[str, str]]:
-    """IBAN -> {"id", "name"} for every Firefly asset account that has an IBAN."""
-    assets: dict[str, dict[str, str]] = {}
+# IBAN or account number -> {"id", "name"}; None when several accounts share it
+Assets = dict[str, dict[str, str] | None]
+
+
+def load_asset_accounts(client: FireflyClient) -> Assets:
+    """Every Firefly asset account, findable by its IBAN and by its account number."""
+    assets: Assets = {}
     for account in client.get_all("accounts?type=asset"):
-        iban = clean_iban(account["attributes"].get("iban"))
-        if iban:
-            assets[iban] = {"id": str(account["id"]), "name": account["attributes"]["name"]}
+        attributes = account["attributes"]
+        found = {"id": str(account["id"]), "name": attributes["name"]}
+        for identifier in {clean_identifier(attributes.get(field)) for field in ("iban", "account_number")} - {""}:
+            assets[identifier] = found if assets.get(identifier, found) is found else None
     return assets
+
+
+def find_asset(assets: Assets, *identifiers: str | None) -> dict[str, str] | None:
+    """The own account of the first identifier Firefly knows; ValueError if several accounts share it."""
+    for identifier in map(clean_identifier, identifiers):
+        if identifier in assets:
+            if assets[identifier] is None:
+                raise ValueError(f"{identifier} is the IBAN or account number of several Firefly asset accounts")
+            return assets[identifier]
+    return None
+
+
+def load_currencies(client: FireflyClient) -> dict[str, bool]:
+    """Code -> enabled, for every currency Firefly knows."""
+    return {c["attributes"]["code"]: bool(c["attributes"]["enabled"]) for c in client.get_all("currencies")}
+
+
+def ensure_currencies(
+    split: dict[str, Any], currencies: dict[str, bool], client: FireflyClient, dry_run: bool, log: Callable[[str], None]
+) -> None:
+    """
+    Enable a disabled currency the split uses (Firefly stores the transaction either way).
+    A currency Firefly doesn't know raises ValueError: creating one needs a name and symbol.
+    """
+    for code in (split.get("currency_code"), split.get("foreign_currency_code")):
+        if not code or currencies.get(code):
+            continue
+        if code not in currencies:
+            raise ValueError(f"Currency {code} unknown to Firefly")
+        if dry_run:
+            log(f"Would enable currency {code}")
+        else:
+            status, response = client.request("POST", f"currencies/{code}/enable")
+            if status not in (200, 204):
+                raise ValueError(f"Enabling currency {code}: HTTP {status}: {response.get('message', '')}")
+            log(f"Enabled currency {code}")
+        currencies[code] = True
 
 
 def load_transfer_pool(client: FireflyClient) -> TransferPool:
@@ -131,7 +175,7 @@ def claim_transfer(pool: TransferPool, key: tuple[str, str, str], on: date, side
 # ---------------------------------------------------------------------------
 def build_split(
     row: dict[str, str],
-    assets: dict[str, dict[str, str]],
+    assets: Assets,
 ) -> tuple[str, dict[str, Any], tuple[tuple[str, str, str], str] | None]:
     """
     Return (decision, split, transfer_match). decision: withdrawal / deposit / transfer.
@@ -153,15 +197,27 @@ def build_split(
     if not row.get("primary_transaction_date"):
         raise ValueError("primary_transaction_date is empty")
 
-    own_iban = clean_iban(row["asset_account_iban"])
-    own = assets.get(own_iban)
-    if not own:
-        raise ValueError(f"No Firefly asset account with IBAN {own_iban}")
+    foreign_amount = row.get("foreign_amount", "")
+    foreign_currency = row.get("foreign_currency_code", "")
+    if foreign_amount and not RE_AMOUNT.match(foreign_amount):
+        raise ValueError(f"Invalid foreign_amount: '{foreign_amount}'")
+    if bool(foreign_amount) != bool(foreign_currency):
+        raise ValueError(
+            f"foreign_amount '{foreign_amount}' and foreign_currency_code '{foreign_currency}': both or neither"
+        )
 
-    opposing_iban = clean_iban(row.get("opposing_account_iban"))
-    # Absent in files normalized before the column existed
+    # Columns absent in files normalized before they existed
+    own_iban = clean_identifier(row.get("asset_account_iban"))
+    own_number = row.get("asset_account_number") or ""
+    own = find_asset(assets, own_iban, own_number)
+    if not own:
+        raise ValueError(f"No Firefly asset account with IBAN or account number {own_iban or own_number}")
+
+    opposing_iban = clean_identifier(row.get("opposing_account_iban"))
     opposing_number = row.get("opposing_account_number") or ""
-    opposing_asset = assets.get(opposing_iban) if opposing_iban and opposing_iban != own_iban else None
+    opposing_asset = find_asset(assets, opposing_iban, opposing_number)
+    if opposing_asset is own:
+        raise ValueError(f"Counterparty {opposing_iban or opposing_number} is the row's own account")
     outgoing = amount.startswith("-")
 
     # Without a counterparty Firefly books on its Cash account: right for cash withdrawals only
@@ -177,9 +233,12 @@ def build_split(
         "date": row["primary_transaction_date"],
         "amount": amount.lstrip("-"),
         "currency_code": row.get("account_currency_code", ""),
+        "foreign_amount": foreign_amount.lstrip("-"),
+        "foreign_currency_code": foreign_currency,
         "description": description,
         "notes": notes,
         "external_id": row.get("external_id", ""),
+        "internal_reference": row.get("row_key", ""),
         "interest_date": row.get("interest_date", ""),
         "process_date": row.get("transaction_processing_date", ""),
         "payment_date": row.get("payment_date", ""),
@@ -222,7 +281,8 @@ def build_split(
 def import_file(
     path: str,
     client: FireflyClient,
-    assets: dict[str, dict[str, str]],
+    assets: Assets,
+    currencies: dict[str, bool],
     pool: TransferPool,
     batch: bool,
     dry_run: bool,
@@ -262,6 +322,7 @@ def import_file(
     for line_no, row in numbered:
         try:
             decision, split, transfer_match = build_split(row, assets)
+            ensure_currencies(split, currencies, client, dry_run, log)
         except (ValueError, KeyError, ArithmeticError) as exc:
             failed.append((line_no, row, f"line {line_no}: {exc}"))
             counts["failed"] += 1
@@ -458,6 +519,7 @@ def import_all(args: argparse.Namespace) -> int:
         if files:
             started = time.monotonic()
             assets = load_asset_accounts(client)
+            currencies = load_currencies(client)
             pool = load_transfer_pool(client)
             cutoff = (date.today() - timedelta(days=BATCH_OLD_ROW_AGE_DAYS)).isoformat()
             old_rows = sum(count_old_rows(path, cutoff) for path in files)
@@ -465,7 +527,8 @@ def import_all(args: argparse.Namespace) -> int:
             # Logged per file, so each import log says how the run went about it
             run_note = (
                 f"mode {'batch' if batch else 'per row'} ({old_rows} rows before {cutoff} in this run); "
-                f"read {len(assets)} asset accounts and {sum(len(t) for t in pool.values())} transfers "
+                f"read {len({id(a) for a in assets.values() if a})} asset accounts, {len(currencies)} currencies "
+                f"and {sum(len(t) for t in pool.values())} transfers "
                 f"in {time.monotonic() - started:.0f} s"
             )
             if args.dry_run:
@@ -476,7 +539,7 @@ def import_all(args: argparse.Namespace) -> int:
             for path in files:
                 if args.dry_run:
                     print(f"== {os.path.basename(path)}")
-                counts = import_file(path, client, assets, pool, batch, args.dry_run, args.show, run_note)
+                counts = import_file(path, client, assets, currencies, pool, batch, args.dry_run, args.show, run_note)
                 if args.dry_run:
                     print(f"  {dict(counts)}")
                 totals.update(counts)

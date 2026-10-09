@@ -213,16 +213,18 @@ runs after the normalizer loop and turns every row in `data/normalized/` into
 one `POST /api/v1/transactions`.
 
 - **Idempotent** — `error_if_duplicate_hash` makes a re-import of the same
-  row "already present" (needs Firefly ≥ 6.7.0: older versions hashed the batch
+  row "already present", as long as every field sent is the same: the hash
+  covers them all (needs Firefly ≥ 6.7.0: older versions hashed the batch
   flag, so the same row in per-row and batch mode was stored twice). Firefly's check includes deleted transactions:
   purge (`DELETE /api/v1/data/purge`) after deleting, before re-importing.
-- **Firefly state read per run** — asset accounts by IBAN, existing transfers
+- **Firefly state read per run** — asset accounts by IBAN and account number,
+  currencies (a disabled one a row uses is enabled), existing transfers
   for matching. Nothing about Firefly is configured in this repo.
 - **Own transfers: match or create** — both accounts' CSVs carry the same
   movement; the first side creates the transfer, the other claims it
   (`claim_transfer`: same accounts, amount, ±`TRANSFER_MATCH_DAYS`, one claim
   per side). Robust to file order and unequal history coverage. The claiming
-  side's own fields (`external_id`, notes) are not added to the transfer.
+  side's own fields (`external_id`, `row_key`, notes) are not added to the transfer.
 - **Run-level vs row-level failure** — `FireflyAuthError` /
   `FireflyUnavailableError` ([engine/firefly/api.py](../../engine/firefly/api.py))
   stop the run and leave files in place, alerted once per outage via

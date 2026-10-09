@@ -1,6 +1,6 @@
 # Plan 01 — Kern, Fintro en Firefly-inrichting
 
-Status: **in uitvoering — stap 0, 1 en 2 klaar, volgende: stap 3.** Eerst uit te voeren, vóór
+Status: **in uitvoering — stap 0 t/m 3 klaar, volgende: stap 4.** Eerst uit te voeren, vóór
 [plan 02 (Argenta)](02-argenta.md).
 Alles hier is niet Argenta-specifiek, maar plan 02 bouwt erop. Voorbeelden zijn verzonnen
 (publieke repo); echte rijen blijven in de terminal.
@@ -203,7 +203,7 @@ Uitgerold met `data/incoming/`, `data/normalized/` en `data/failed/` leeg en gee
 14.080 rijen, elk alleen `booking_date` → `interest_date` (zelfde waarde) en de twee nieuwe velden;
 29 rijen met een vreemd bedrag, alle op de cent; `notes` en `unmapped_*` nergens veranderd.
 
-### Stap 3 — Importer
+### Stap 3 — Importer ✅
 
 1. Eigen rekeningen opzoekbaar op **IBAN én rekeningnummer** van de Firefly-rekening:
    - eigen kant: `asset_account_iban`, of het nieuwe normalized veld `asset_account_number`
@@ -226,10 +226,38 @@ Uitgerold met `data/incoming/`, `data/normalized/` en `data/failed/` leeg en gee
    tussen eigen rekeningen staat alleen de rijsleutel van de eerste kant in Firefly (zoals nu
    met `external_id`); het contract (stap 0) zegt dat.
 
-Nagaan bij de uitvoering: hoort elk verstuurd veld bij Firefly's duplicaathash? Dan geven de
-nieuwe velden (`interest_date`, vreemde munt, `internal_reference`) een andere hash, en zou een
-bestand dat vóór deze stappen genormaliseerd werd bij opnieuw importeren dubbel komen. Tot de
-volledige herlaadbeurt (plan 02) dan geen oude bestanden opnieuw importeren.
+Nagegaan: **ja, elk verstuurd veld telt mee in Firefly's duplicaathash.** `hashArray()` in
+`app/Factory/TransactionJournalFactory.php` (6.7.4 in de lokale KB, ongewijzigd in 6.7.7, de
+versie op de server) neemt de SHA-256 van de hele rij zoals `StoreRequest` die inleest: een vaste
+set velden, afwezig = null, enkel `import_hash_v2`, `original_source` en `batch_submission` eruit.
+Een rij die vóór stap 2 of 3 geïmporteerd werd, krijgt nu dus een andere hash en zou bij opnieuw
+versturen dubbel komen. Dat gebeurt alleen als iemand een bestand uit `data/imported/` terugzet:
+een opnieuw gedropte bank-CSV houdt de duplicaatindex tegen. Tot de volledige herlaadbeurt
+(plan 02) dus geen oude bestanden opnieuw importeren; staat als gotcha in AGENTS.md.
+
+Uitgevoerd, met keuzes die hierboven nog niet stonden:
+- `asset_account_number` en `row_key` staan **achteraan** in `NORMALIZED_FIELDNAMES`: de
+  genummerde uitvoer van Fintro verschuift dan niet, en lezers gaan op kolomnaam.
+- `row_key` = `<partition_by-waarde>|<duplicaatsleutel>`, dus precies het bereik waarin de
+  duplicaatindex de sleutel uniek houdt; zonder `partition_by` de banknaam.
+- Een IBAN of rekeningnummer dat bij **twee** Firefly-rekeningen staat, laat de rijen die het
+  gebruiken falen, in plaats van er één te kiezen.
+- Munten: Firefly weigert een uitgeschakelde munt **niet** (bij opslaan wordt `enabled` nergens
+  nagekeken, en automatisch inschakelen staat in de broncode uitgecommentarieerd). Inschakelen
+  is dus voor Firefly's eigen schermen, niet voor de import. Het gebeurt per rij, net vóór het
+  versturen, en staat in de importlog; `--dry-run` meldt "Would enable" en verstuurt niets.
+- `foreign_amount` gaat zonder teken naar Firefly, net als `amount`.
+- AGENTS.md, architectural_patterns §13 en het contract zijn nu al bijgewerkt waar ze anders
+  onjuist zouden worden; stap 6 doet de rest.
+
+Getest. Regressie: 0 verschillen op 14.080 rijen. Dry-run op de server (Firefly 6.7.7), alle
+bestanden in `data/imported/` (oude kolommen): 14.080 rijen, 0 fouten, 1.573 overschrijvingen
+teruggevonden; het vangnet "tegenpartij = eigen rekening" slaat nergens aan. Daarna alle
+Fintro-originelen genormaliseerd in een wegwerpkopie en die uitvoer door de dry-run (zonder
+bestand op de server): zelfde aantallen, 0 fouten, `row_key` uniek op alle 14.080 rijen, de
+29 rijen met vreemde munt dragen beide velden en `internal_reference`; USD, GBP en SEK staan
+nu uit in Firefly en worden ingeschakeld zodra een rij met die munt echt geïmporteerd wordt
+(uiterlijk bij de herlaadbeurt).
 
 ### Stap 4 — Regressietest en `debug_row`
 

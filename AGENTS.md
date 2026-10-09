@@ -215,12 +215,19 @@ alert names the exact paths).
 
 Row → split mapping lives in `build_split()`:
 
-- Sign of `amount` decides withdrawal / deposit; `asset_account_iban` must match
-  a Firefly asset account (looked up by IBAN every run).
+- Sign of `amount` decides withdrawal / deposit; `asset_account_iban` (else
+  `asset_account_number`) must match the IBAN or the account number of a Firefly
+  asset account (read every run). A counterparty that is the row's own account
+  fails the row.
 - A counterparty account without an IBAN (foreign account number) goes to
   `opposing_account_number` → `source_number` / `destination_number`: Firefly
   validates `*_iban` as an IBAN, `*_number` is free text.
-- Counterparty IBAN of an own asset account → **transfer**, deduplicated by
+- `foreign_amount` / `foreign_currency_code` go to Firefly's fields of that name;
+  a currency disabled in Firefly is enabled (logged), one Firefly doesn't know
+  fails the row.
+- `row_key` → `internal_reference`.
+- Counterparty IBAN or account number of an own asset account (matched against
+  both fields) → **transfer**, deduplicated by
   "match or create": the first side creates it, the other side claims it
   (same accounts, same amount, ±7 days). Order and history coverage of the
   accounts' CSVs don't matter. The transfer carries only the first side's
@@ -237,6 +244,13 @@ Gotchas:
 - **Firefly ≥ 6.7.0 is required.** Before it (issue #12710) the duplicate hash
   included the batch flag, so a row imported per row and again in batch mode
   was stored twice.
+- Firefly's **duplicate hash covers every field** of the split (SHA-256 of the
+  whole request row, absent fields as null; only `batch_submission` is left out).
+  So a change to what `build_split` sends makes an already imported row a second
+  transaction when it is sent again: deploy such a change only while
+  `data/normalized/` is empty, and never move a file from `data/imported/` back
+  to `data/normalized/`. A re-dropped bank CSV is safe: the duplicate index
+  stops its rows before the importer.
 - **`enable_batch_processing` must be on** (Firefly admin configuration, set it
   in the GUI: the configuration API stores it as text, which Firefly ignores).
   While it is off, batch mode silently does the full per-row work.

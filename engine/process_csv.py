@@ -45,6 +45,8 @@ NORMALIZED_FIELDNAMES = [
     "unmapped_exchange_and_transaction_costs",  # 18
     "unmapped_transaction_type",  # 19
     "unmapped_reference_parts",  # 20
+    "asset_account_number",  # 21: own account without an IBAN (e.g. a credit card)
+    "row_key",  # 22: <account>|<duplicate key>, set here, not by the bank module
 ]
 
 
@@ -339,6 +341,9 @@ def main() -> None:
 
             # Update in-memory duplicate index so later rows see this one
             duplicate_index.setdefault(key, []).append(duplicate_index_row)
+
+            # Unique within the duplicate index's scope: one account, or the bank without partition_by
+            normalized_row["row_key"] = f"{partition_value or bank_name}|{key}"
 
             # Valid normalized row
             normalized_any = True

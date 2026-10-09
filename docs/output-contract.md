@@ -32,6 +32,8 @@ in that order. Every bank fills the same columns; empty means "not given by the 
 | `unmapped_exchange_and_transaction_costs` | the foreign-amount/costs line of `notes` | text, or empty |
 | `unmapped_transaction_type` | the transaction-type line of `notes` | text |
 | `unmapped_reference_parts` | the references line of `notes` | text, or empty |
+| `asset_account_number` | the own account, when it has no IBAN (e.g. a credit card) | free text, or empty |
+| `row_key` | unique, stable key of the row (see "Keys") | `<account>\|<duplicate key>` |
 
 **`notes`**, lines in this order, each only when present:
 1. foreign amount, rate and costs, as the bank writes them after a label
@@ -50,6 +52,11 @@ in that order. Every bank fills the same columns; empty means "not given by the 
 
 Rows are unique per (`asset_account_iban`, `external_id`) for the banks above.
 
+`row_key` is unique and stable for every bank: the account (the duplicate index's `partition_by`
+value, e.g. the IBAN without spaces) and the row's duplicate key, joined by `|`
+(Fintro: `BE68539007547034|2026-00123`). A tool that must find a transaction again uses it, not
+`external_id`, which is not unique for every bank.
+
 ## In Firefly
 
 The importer turns each row into one Firefly transaction (`build_split` in
@@ -63,13 +70,16 @@ The importer turns each row into one Firefly transaction (`build_split` in
 | `payment_date` | `payment_date` |
 | `amount`, type | `amount` without sign; negative → withdrawal, positive → deposit; counterparty is an own account → transfer |
 | `currency_code` | `account_currency_code` |
+| `foreign_amount`, `foreign_currency_code` | `foreign_amount` without sign, `foreign_currency_code` |
 | `description` | `description`, else the counterparty name, else the first line of `notes` |
 | `notes` | `notes` |
 | `external_id` | `external_id` |
-| source / destination | own account by IBAN; counterparty by name, IBAN, account number and BIC; no counterparty → `(onbekend)`, or Firefly's Cash account for a cash withdrawal |
+| `internal_reference` | `row_key` |
+| source / destination | own account by IBAN or account number (`asset_account_iban`, else `asset_account_number`, each matched against both fields of the Firefly account); counterparty by name, IBAN, account number and BIC; no counterparty → `(onbekend)`, or Firefly's Cash account for a cash withdrawal |
 
 A transfer between own accounts is stored once: it carries the fields of whichever side was
-imported first; the other side's `external_id` and `notes` stay in its `data/imported/` file only.
+imported first; the other side's `external_id`, `row_key` and `notes` stay in its `data/imported/`
+file only.
 
 ## Changes
 
@@ -77,3 +87,4 @@ imported first; the other side's `external_id` and `notes` stay in its `data/imp
 |---|---|
 | 2026-10-09 | First version, describing the output as it is. |
 | 2026-10-09 | `booking_date` renamed `interest_date`, sent to Firefly's `interest_date` instead of `book_date`. New columns `foreign_amount`, `foreign_currency_code` (not yet sent to Firefly). |
+| 2026-10-09 | New columns `asset_account_number` and `row_key`, added at the end. Sent to Firefly: `foreign_amount` / `foreign_currency_code`, and `row_key` as `internal_reference`. Own accounts are found by IBAN or account number. |
