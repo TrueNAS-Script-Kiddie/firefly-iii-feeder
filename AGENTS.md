@@ -34,8 +34,10 @@ cd /tmp && time (for i in {1..30}; do bash -s < <app-ds>/firefly-iii-feeder/fire
 |------|---------|
 | [engine/process_csv.py](engine/process_csv.py) | Normalizer entry point; orchestrates all stages. `main()` + `NORMALIZED_FIELDNAMES` |
 | [engine/core/](engine/core/) | Shared pipeline modules: `csv_runtime`, `csv_validation`, `duplicate_index`, `completion`, `runtime` |
-| [engine/banks/](engine/banks/) | One sub-package per bank. Each must export `normalize_row()` |
+| [engine/banks/](engine/banks/) | One sub-package per bank. Each must export `normalize_row()` and has a `README.md` (see "Banks") |
 | [engine/banks/fintro/](engine/banks/fintro/) | Reference bank: `normalize` (exports `normalize_row`), `extract_details`, `parsers`, `reconcile`; `debug_row` shows how a row is parsed |
+| [docs/output-contract.md](docs/output-contract.md) | What other tools may rely on in the normalized output and in Firefly |
+| `plans/` | Plans for work in progress; once done, their lasting facts move into the docs and the plan is deleted (git keeps it) |
 | [engine/regression.py](engine/regression.py) | Regression test: every row of the bank CSVs through a git ref and the working tree, reporting each changed result |
 | [engine/firefly/](engine/firefly/) | Firefly III import: `api` (REST client), `import_normalized` (importer) |
 | [deploy/](deploy/) | Source of root-side helper scripts; installed by hand on each server, never run from here (see "Root helper") |
@@ -135,14 +137,16 @@ or a repeat of something already kept — and only explicitly, through a named
 pattern or rule. Anything it cannot place makes the row fail; the fix then goes
 into the parser (`debug_row` shows where a row gets stuck).
 
-## Fintro message markers
+## Banks
 
-Incoming payments from employers, health funds and unions start their free text
-with `/A/`, `/B/` or `/C/`. The marker stays in `description` unchanged. By payer
-(inferred from the data, no official definition found): `/A/` wages (employers),
-`/B/` replacement-income benefits (health fund, union, unemployment fund),
-`/C/` reimbursed care (health fund, lines like `PREST HUISARTS`). Meant for
-filtering/tagging later.
+Everything specific to one bank — how to export, its columns, what makes a row
+unique, parsing rules, what is dropped on purpose, markers, quirks — is in that
+bank's README. Read it before changing the bank's config or module. Claude Code
+loads it by itself when working in the bank's folder (`CLAUDE.md` there imports it).
+
+| Bank | Export | Docs |
+|------|--------|------|
+| Fintro | CSV, one per account | [engine/banks/fintro/README.md](engine/banks/fintro/README.md) |
 
 ## Firefly III Import
 
@@ -191,8 +195,8 @@ Row → split mapping lives in `build_split()`:
 - Empty description → counterparty name → first line of `notes` (Firefly
   requires a description).
 - No counterparty → `(onbekend)`, except cash withdrawals (Firefly's Cash
-  account). Fintro's own transactions get counterparty `Fintro` in the
-  normalizer (`BANK_COUNTERPARTY_TRANSACTION_TYPES`).
+  account). A bank's own transactions (fees, interest) get the bank as
+  counterparty in its module (see the bank's README).
 
 Gotchas:
 
@@ -278,9 +282,14 @@ cp bank-csv-originals/Fintro/*.csv data/incoming/
    filter values, `duplicate_key`. See [config/fintro.yaml](config/fintro.yaml).
    Bank name is derived from the filename by `load_all_bank_configs()`
    in [engine/core/csv_runtime.py](engine/core/csv_runtime.py) — no `bank:` field needed.
-2. Create `engine/banks/<bank>.py` (or `engine/banks/<bank>/` package
-   exposing `normalize_row` in `__init__.py`). See [engine/banks/fintro/](engine/banks/fintro/).
-3. No further code changes — `autodetect_bank()` in
+2. Create the package `engine/banks/<bank>/`, exposing `normalize_row` in
+   `__init__.py`. See [engine/banks/fintro/](engine/banks/fintro/).
+3. Document it in `engine/banks/<bank>/README.md` with the headings of the Fintro
+   README (Export, Columns, Unique row, Field mapping, parsing, Dropped on purpose,
+   Markers and conventions, Quirks, Checking), add `engine/banks/<bank>/CLAUDE.md`
+   containing `@README.md`, a row in "Banks" above and in README.md, and its
+   transaction types and unique key in [docs/output-contract.md](docs/output-contract.md).
+4. No further code changes — `autodetect_bank()` in
    [engine/core/csv_validation.py](engine/core/csv_validation.py) matches configs by
    header, and `process_csv.py` imports the bank module dynamically via
    `importlib.import_module(f"engine.banks.{bank_name}")`. The importer needs

@@ -73,59 +73,29 @@ All refs are collected in `context["open_writers"]` for guaranteed cleanup by
 
 ## 5. Two-Source Data Reconciliation
 
-Fintro CSVs carry many fields in both a dedicated column and inside the
-free-text `details` column. The normalizer compares both sources and either
-merges them or raises `ValueError` on mismatch — neither source is blindly
-trusted.
-
-Precedence rules live in [engine/banks/fintro/normalize.py](../../engine/banks/fintro/normalize.py):
-
-- **CSV wins** for amount, IBAN, dates, and free-text messages (details
-  validates).
-- **Details wins** for structured references, BIC, and fields missing from
-  the CSV column.
-- **Structured messages** (Belgian `+++xxx/xxxx/xxxxx+++` format) take
-  priority over free-text when either source has one
-  (`extract_structured_ref` in [engine/banks/fintro/parsers.py](../../engine/banks/fintro/parsers.py)).
-
-`merge_opposing_account_name` and `reconcile_transaction_types` in
-[engine/banks/fintro/reconcile.py](../../engine/banks/fintro/reconcile.py) encode the
-field-by-field rules. The counterparty name is the column name plus whatever the
-details add after it (often the address); a leading filler `VAN` is dropped only
-when the column name proves it is not part of the name (`VAN DER MEULEN TOM`).
+When a bank states the same fact twice (a dedicated column and a free-text
+field), its module compares both and either merges them or raises `ValueError`
+on a mismatch — neither source is blindly trusted. Which source wins per field
+is bank-specific and documented in the bank's README (Fintro:
+[engine/banks/fintro/README.md](../../engine/banks/fintro/README.md), "Two sources").
 Both follow the normalization principle in AGENTS.md: nothing meaningful is lost.
 
-## 6. Two-Phase `normalize_row` + Sequential `details` Parsing
+## 6. Two-Phase `normalize_row` + Sequential Free-Text Parsing
 
-`normalize_row()` in [engine/banks/fintro/normalize.py](../../engine/banks/fintro/normalize.py)
-is split into two explicit phases:
+A bank's `normalize_row()` is split into two explicit phases:
 
 **Phase 1 — Extraction.** Pull all values into named variables; no output is
-written yet.
-- *1a* — individual dedicated columns are pulled by key from `csv_row`.
-- *1b* — `extract_details()` in [engine/banks/fintro/extract_details.py](../../engine/banks/fintro/extract_details.py)
-  parses the free-text `details` column in two sub-passes:
-  1. Easy-to-detect postfixes anchored with `$` are stripped first
-     (VALUTADATUM, BANKREFERENTIE, UITGEVOERD OP, then the message:
-     `MEDEDELING : …` or ZONDER MEDEDELING).
-  2. The remainder is matched by leading pattern anchored with `^` to
-     identify transaction type and extract the rest (VERBETERING, STORTING, DOORLOPENDE
-     OPDRACHT, DOMICILIERING, BUITENLANDSE OVERSCHRIJVING, OVERSCHRIJVING,
-     BETALING, ANNULERING BETALING, MOBIELE BETALING, GELDOPNEMING, old-card
-     fallback). The old-card fallback, only for rows before 2018-09-01, takes
-     whatever is left as the counterparty, even after another pattern matched.
-     It is not guarded further because that history is complete: every such
-     row is in the originals and covered by the regression test.
+written yet: dedicated columns by key from `csv_row`, then the free-text field.
+Free text is parsed sequentially and destructively: each matched segment is
+cut from the remaining text, so a later pattern cannot match it again, and
+anything left at the end raises `ValueError`.
 
-  Each matched segment is removed from `remaining_details`. Anything left at
-  the end raises `ValueError`.
+**Phase 2 — Reconcile, reformat, assemble.** No parsing at this stage; only
+cross-source decisions, cosmetic replacement, and final assembly of the 18
+`NORMALIZED_FIELDNAMES` defined in [engine/process_csv.py](../../engine/process_csv.py).
 
-**Phase 2 — Reconcile, reformat, assemble.** No parsing of `details` at this
-stage; only cross-source decisions, cosmetic replacement (via the
-`REPLACE_IN_*` tables in `normalize.py`), card-number masking and
-exchange-cost formatting (two small regexes), and final
-assembly of the 18 `NORMALIZED_FIELDNAMES` defined in
-[engine/process_csv.py](../../engine/process_csv.py).
+The patterns and their order are bank-specific: see the bank's README (Fintro:
+"Parsing `Details`").
 
 ## 7. Stateful In-Memory + Persistent Dedup Index
 

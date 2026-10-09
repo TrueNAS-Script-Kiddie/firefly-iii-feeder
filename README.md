@@ -17,6 +17,14 @@ Designed for unattended cron execution on TrueNAS or any Linux host.
   each file to `data/imported/`
 - Alerts on stderr (emailed by cron); silent on success
 
+## Supported Banks
+
+| Bank | Export | Docs |
+|------|--------|------|
+| Fintro | CSV, one per account | [engine/banks/fintro/README.md](engine/banks/fintro/README.md) |
+
+What other tools may rely on in the output: [docs/output-contract.md](docs/output-contract.md).
+
 ## Project Structure
 
 ```
@@ -27,9 +35,11 @@ firefly-iii-feeder/
 │   ├── core/                      # csv_runtime, csv_validation,
 │   │                              # duplicate_index, completion, runtime
 │   ├── banks/
-│   │   └── fintro/                # Per-bank package: normalize,
-│   │                              # extract_details, parsers, reconcile
+│   │   └── fintro/                # Per-bank package: README (export, parsing),
+│   │                              # normalize, extract_details, parsers, reconcile
 │   └── firefly/                   # api (REST client), import_normalized
+├── docs/output-contract.md        # What other tools may rely on
+├── plans/                         # Work in progress; removed once done
 ├── config/
 │   ├── fintro.yaml                # Per-bank config (columns, regex, dedup)
 │   └── app.env                    # FIREFLY_URL, FIREFLY_TOKEN (server only)
@@ -125,10 +135,11 @@ selects `E,F,W,I,UP,B`).
 
 1. Drop a `config/<bank>.yaml` defining required columns, regex rules,
    filter values and `duplicate_key`. See `config/fintro.yaml` as reference.
-2. Add an `engine/banks/<bank>.py` module (or an `engine/banks/<bank>/`
-   package exposing `normalize_row` in `__init__.py`) that implements
-   `normalize_row(csv_row) -> dict`.
-3. Nothing else to wire up — `autodetect_bank()` matches by CSV header and
+2. Add an `engine/banks/<bank>/` package exposing `normalize_row` in
+   `__init__.py` that implements `normalize_row(csv_row) -> dict`.
+3. Document the bank in `engine/banks/<bank>/README.md` (same headings as
+   Fintro's) and add it to "Supported Banks" (details in `AGENTS.md`).
+4. Nothing else to wire up — `autodetect_bank()` matches by CSV header and
    `process_csv.py` imports the bank module dynamically.
 
 ## VS Code SFTP Sync
