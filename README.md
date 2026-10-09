@@ -108,7 +108,7 @@ originals through the last commit and the working tree, and reports each row
 whose result changed (exit 1 if any):
 
 ```bash
-python -m engine.regression "//<server>/firefly-iii-feeder/bank-csv-originals/*.csv"
+python -m engine.regression "//<server>/firefly-iii-feeder/bank-csv-originals/Fintro/*.csv"
 ```
 
 ## Lint

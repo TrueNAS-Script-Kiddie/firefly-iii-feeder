@@ -209,7 +209,8 @@ and consumed by `build_paths` in [engine/core/csv_runtime.py](../../engine/core/
   `cp -p` keep an old mtime, but every write bumps ctime) and its last byte is a
   newline; after 10 min process anyway so a broken file gets reported.
 - **Idle runs** exit before the lock when `incoming/` and `normalized/` hold no
-  CSV and no `firefly-recalculate.flag` is pending: builtins only, no Python.
+  CSV and no `firefly-recalculate.flag` is pending: builtins only — no subshell, no
+  external command, no Python, no write (hard rule, see AGENTS.md "Idle cost").
 - Exit codes `0/65/75/99` are "Python handled it"; anything else triggers a
   fallback move of the incoming file to `data/failed/`.
 - Runs every minute; alerts go to stderr, which the TrueNAS cron job emails.

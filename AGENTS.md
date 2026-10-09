@@ -12,6 +12,22 @@ Runs unattended from a TrueNAS cron job.
 - **YAML** — per-bank configuration ([config/](config/))
 - **Dependencies** — Python stdlib + `pyyaml` only (no build step; the Firefly client uses `urllib`)
 
+## Idle cost (hard rule)
+
+The cron job runs every minute, so an idle run must cost next to nothing. Until there is
+work (a CSV in `data/incoming/` or `data/normalized/`, or a pending
+`firefly-recalculate.flag`), `firefly-iii-feeder.bash` uses bash builtins only: no subshell,
+no external command, no Python, no file write. Every new check goes after that exit.
+
+Measured on truenas-master: 1.9 ms CPU per idle run (bash alone: 1.2 ms); starting Python
+with the importer's imports costs 60 ms and 17 MB, 30 times as much. Re-measure after
+changing the script
+(in `/tmp` there is no `data/`, so it takes the idle path and writes nothing; divide by 30):
+
+```bash
+cd /tmp && time (for i in {1..30}; do bash -s < <app-ds>/firefly-iii-feeder/firefly-iii-feeder.bash; done)
+```
+
 ## Key Directories
 
 | Path | Purpose |
@@ -25,7 +41,7 @@ Runs unattended from a TrueNAS cron job.
 | [deploy/](deploy/) | Source of root-side helper scripts; installed by hand on each server, never run from here (see "Root helper") |
 | [config/](config/) | `<bank>.yaml` configs (bank name is the filename) + `app.env` (`FIREFLY_URL`, `FIREFLY_TOKEN`) |
 | [firefly-iii-feeder.bash](firefly-iii-feeder.bash) | Cron entry; `flock`, upload check (ctime ≥ 30 s + complete last line), normalizes each incoming CSV, then runs the importer |
-| `bank-csv-originals/` | Backup of every unique bank export; source for regenerating `data/` |
+| `bank-csv-originals/` | Backup of every unique bank export, one subfolder per bank (`Fintro/`); source for regenerating `data/` |
 | `data/incoming/` | Drop CSVs here to trigger processing |
 | `data/normalized/` | Normalized output waiting for import (timestamped) |
 | `data/imported/` | Normalized files after import: `<ts>-<name>-imported.csv` (`-imported-partial` if any row of the bank CSV failed, in the normalizer or the import; `-imported-retry[-partial]` for a retried `-import-failed` file) |
@@ -76,7 +92,7 @@ Regression test, before every parser change is committed (desktop, in the repo;
 the originals are only read via the share; exit 1 when anything changed):
 
 ```bash
-python -m engine.regression [--base REF] [--show N] "//<server>/firefly-iii-feeder/bank-csv-originals/*.csv"
+python -m engine.regression [--base REF] [--show N] "//<server>/firefly-iii-feeder/bank-csv-originals/Fintro/*.csv"
 ```
 
 Every reported change must be explained: fixed rows, and changed outputs that
@@ -253,7 +269,7 @@ reload them; the cron picks them up within a minute:
 
 ```bash
 rm -rf data/duplicate-index data/normalized data/imported data/processed data/failed data/logs data/temp data/*.flag
-cp bank-csv-originals/*.csv data/incoming/
+cp bank-csv-originals/Fintro/*.csv data/incoming/
 ```
 
 ## Adding a New Bank
