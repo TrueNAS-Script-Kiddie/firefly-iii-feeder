@@ -29,7 +29,7 @@ DUPLICATE_INDEX_DIR = os.path.join(BASE_DIR, "data", "duplicate-index")
 SHOWN_COLUMNS = [
     "external_id",
     "primary_transaction_date",
-    "booking_date",
+    "interest_date",
     "amount",
     "transaction_type",
     "opposing_account_iban",

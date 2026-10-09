@@ -28,21 +28,23 @@ NORMALIZED_FIELDNAMES = [
     "external_id",  # 1
     "primary_transaction_date",  # 2
     "transaction_processing_date",  # 3
-    "booking_date",  # 4
+    "interest_date",  # 4
     "payment_date",  # 5
     "amount",  # 6
     "account_currency_code",  # 7
-    "asset_account_iban",  # 8
-    "opposing_account_iban",  # 9
-    "opposing_account_bic",  # 10
-    "opposing_account_number",  # 11: counterparty account without an IBAN
-    "opposing_account_name",  # 12
-    "is_cash_withdrawal",  # 13: "1" for cash withdrawals, else empty
-    "description",  # 14
-    "notes",  # 15
-    "unmapped_exchange_and_transaction_costs",  # 16
-    "unmapped_transaction_type",  # 17
-    "unmapped_reference_parts",  # 18
+    "foreign_amount",  # 8: amount in another currency, signed like amount
+    "foreign_currency_code",  # 9
+    "asset_account_iban",  # 10
+    "opposing_account_iban",  # 11
+    "opposing_account_bic",  # 12
+    "opposing_account_number",  # 13: counterparty account without an IBAN
+    "opposing_account_name",  # 14
+    "is_cash_withdrawal",  # 15: "1" for cash withdrawals, else empty
+    "description",  # 16
+    "notes",  # 17
+    "unmapped_exchange_and_transaction_costs",  # 18
+    "unmapped_transaction_type",  # 19
+    "unmapped_reference_parts",  # 20
 ]
 
 

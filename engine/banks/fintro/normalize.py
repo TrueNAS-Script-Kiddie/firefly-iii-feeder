@@ -32,6 +32,7 @@ from engine.banks.fintro.parsers import (
 )
 from engine.banks.fintro.reconcile import (
     merge_opposing_account_name,
+    reconcile_foreign_amount,
     reconcile_transaction_types,
 )
 
@@ -181,7 +182,7 @@ def normalize_row(csv_row: dict[str, str]) -> dict[str, Any]:
     column_description = csv_row.get("description", "").strip()
     column_transaction_type = csv_row["transaction_type"].replace(" in euro", "")
     column_primary_transaction_date = parse_ddmmyyyy(csv_row["primary_transaction_date"])
-    column_booking_date = parse_ddmmyyyy(csv_row["booking_date"])
+    column_interest_date = parse_ddmmyyyy(csv_row["interest_date"])
 
     # ==================================================================
     # PHASE 1b — EXTRACT DETAILS
@@ -199,21 +200,23 @@ def normalize_row(csv_row: dict[str, str]) -> dict[str, Any]:
         "external_id": "",  # 1
         "primary_transaction_date": "",  # 2
         "transaction_processing_date": "",  # 3
-        "booking_date": "",  # 4
+        "interest_date": "",  # 4
         "payment_date": "",  # 5
         "amount": "",  # 6
         "account_currency_code": "",  # 7
-        "asset_account_iban": "",  # 8
-        "opposing_account_iban": "",  # 9
-        "opposing_account_bic": "",  # 10
-        "opposing_account_number": "",  # 11
-        "opposing_account_name": "",  # 12
-        "is_cash_withdrawal": "",  # 13
-        "description": "",  # 14
-        "notes": "",  # 15
-        "unmapped_exchange_and_transaction_costs": "",  # 16
-        "unmapped_transaction_type": "",  # 17
-        "unmapped_reference_parts": "",  # 18
+        "foreign_amount": "",  # 8
+        "foreign_currency_code": "",  # 9
+        "asset_account_iban": "",  # 10
+        "opposing_account_iban": "",  # 11
+        "opposing_account_bic": "",  # 12
+        "opposing_account_number": "",  # 13
+        "opposing_account_name": "",  # 14
+        "is_cash_withdrawal": "",  # 15
+        "description": "",  # 16
+        "notes": "",  # 17
+        "unmapped_exchange_and_transaction_costs": "",  # 18
+        "unmapped_transaction_type": "",  # 19
+        "unmapped_reference_parts": "",  # 20
     }
 
     # column_external_id -> external_id
@@ -225,13 +228,13 @@ def normalize_row(csv_row: dict[str, str]) -> dict[str, Any]:
     # details.transaction_processing_date -> transaction_processing_date
     normalized["transaction_processing_date"] = details["transaction_processing_date"]
 
-    # column_booking_date &| details.booking_date (match) -> booking_date
-    if details["booking_date"] and details["booking_date"] != column_booking_date:
+    # column_interest_date &| details.interest_date (match) -> interest_date
+    if details["interest_date"] and details["interest_date"] != column_interest_date:
         raise ValueError(
             "Value date mismatch between dedicated column and details: "
-            f"column_booking_date='{column_booking_date}' details_booking_date='{details['booking_date']}'"
+            f"column_interest_date='{column_interest_date}' details_interest_date='{details['interest_date']}'"
         )
-    normalized["booking_date"] = column_booking_date
+    normalized["interest_date"] = column_interest_date
 
     # details.payment_date -> payment_date
     normalized["payment_date"] = details["payment_date"]
@@ -316,6 +319,13 @@ def normalize_row(csv_row: dict[str, str]) -> dict[str, Any]:
     # mix -> notes + unmapped columns
     notes_parts: list[str] = []
     reference_parts: list[str] = []
+
+    # details.exchange_and_transaction_costs &| column_amount (cent check) -> foreign_amount, foreign_currency_code
+    normalized["foreign_amount"], normalized["foreign_currency_code"] = reconcile_foreign_amount(
+        details["exchange_and_transaction_costs"],
+        Decimal(column_amount.replace(",", ".")),
+        column_account_currency_code,
+    )
 
     # details.exchange_and_transaction_costs -> notes
     details_exchange_and_transaction_costs = details["exchange_and_transaction_costs"]

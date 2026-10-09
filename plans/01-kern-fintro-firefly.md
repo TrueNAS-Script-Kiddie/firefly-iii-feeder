@@ -1,6 +1,6 @@
 # Plan 01 — Kern, Fintro en Firefly-inrichting
 
-Status: **in uitvoering — stap 0 en 1 klaar, volgende: stap 2.** Eerst uit te voeren, vóór
+Status: **in uitvoering — stap 0, 1 en 2 klaar, volgende: stap 3.** Eerst uit te voeren, vóór
 [plan 02 (Argenta)](02-argenta.md).
 Alles hier is niet Argenta-specifiek, maar plan 02 bouwt erop. Voorbeelden zijn verzonnen
 (publieke repo); echte rijen blijven in de terminal.
@@ -171,7 +171,7 @@ Uitgevoerd, met drie keuzes die hierboven nog niet stonden:
 Getest in een kopie: Fintro-export, onbekend bestand, gesimuleerde crash, bezette seconde;
 regressie 0 verschillen op 14.080 rijen; idle op de server 1,9 ms.
 
-### Stap 2 — Fintro: valutadatum en vreemde munt
+### Stap 2 — Fintro: valutadatum en vreemde munt ✅
 
 Apart, zodat de regressietest precies deze verschillen toont en niets anders:
 1. `booking_date` → `interest_date` in `config/fintro.yaml`, `normalize.py`, `debug_row.py`,
@@ -189,6 +189,19 @@ de SFTP-watcher zet elk opgeslagen bestand meteen op de server. Dus vóór de ee
 op de server nakijken dat `data/incoming/` en `data/normalized/` leeg zijn en er geen
 `data/*.flag` wacht, en alle bestanden van deze stap snel na elkaar opslaan. Wat al in Firefly staat, houdt `book_date` tot de
 herlaadbeurt (plan 02).
+
+Uitgevoerd, met twee punten die hierboven nog niet stonden:
+- Fintro drukt de koers soms met de komma één plaats verkeerd af (verzonnen: `SEK 100,00 KOERS
+  1,000000 WISSELKOSTEN: 0,15 EUR` bij -10,15, bedoeld 10,000000). De rekencontrole probeert daarom
+  ook koers ×10 en ÷10. Het origineel met de hand verbeteren is afgewezen: een latere export van
+  dezelfde periode heeft de fout weer, en de duplicaatindex (die Details bewaart) meldt dan een
+  conflict. In Firefly komt de koers alleen als tekst in de notities.
+- De hernoeming in `config/fintro.yaml` herschrijft elke Fintro-duplicaatindex (architectural_patterns
+  §7): voor rijen die al in de index zitten is de valutadatum `<not recorded>` en wordt ze bij een
+  nieuwe export niet vergeleken, tot de volledige herlaadbeurt (plan 02).
+Uitgerold met `data/incoming/`, `data/normalized/` en `data/failed/` leeg en geen flag. Regressie:
+14.080 rijen, elk alleen `booking_date` → `interest_date` (zelfde waarde) en de twee nieuwe velden;
+29 rijen met een vreemd bedrag, alle op de cent; `notes` en `unmapped_*` nergens veranderd.
 
 ### Stap 3 — Importer
 

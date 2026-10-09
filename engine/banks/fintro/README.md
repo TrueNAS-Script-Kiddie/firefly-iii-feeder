@@ -17,7 +17,7 @@ entry point `normalize_row` in [normalize.py](normalize.py). All examples below 
 |---|---|---|
 | Volgnummer | `external_id` | `YYYY-NNNNN`. A pending row has `YYYY-` without a number: filtered out, it is final in a later export |
 | Uitvoeringsdatum | `primary_transaction_date` | `dd/mm/yyyy` |
-| Valutadatum | `booking_date` | `dd/mm/yyyy` |
+| Valutadatum | `interest_date` | `dd/mm/yyyy` |
 | Bedrag | `amount` | `-1234,56` |
 | Valuta rekening | `account_currency_code` | not empty; the module accepts only `EUR` |
 | Rekeningnummer | `asset_account_iban` | IBAN |
@@ -41,10 +41,11 @@ Volgnummer is unique within an account and never changes.
 | `external_id` | Volgnummer |
 | `primary_transaction_date` | Uitvoeringsdatum |
 | `transaction_processing_date` | details `UITGEVOERD OP dd/mm[/yyyy]`; a missing year comes from the date closest to Uitvoeringsdatum |
-| `booking_date` | Valutadatum; must equal details `VALUTADATUM` when present |
+| `interest_date` | Valutadatum; must equal details `VALUTADATUM` when present |
 | `payment_date` | details: date (and time, if given) of a card payment, withdrawal or deposit |
 | `amount` | Bedrag, decimal point |
 | `account_currency_code` | Valuta rekening; anything but `EUR` fails the row |
+| `foreign_amount`, `foreign_currency_code` | details: amount in another currency (`SEK 100,00 KOERS …`), signed like Bedrag; must add up (see Two sources) |
 | `asset_account_iban` | Rekeningnummer, without spaces |
 | `opposing_account_iban` | Tegenpartij, else the IBAN in details; both present → must match |
 | `opposing_account_bic` | details `BIC` |
@@ -86,6 +87,10 @@ merges or raises on a mismatch; neither source is trusted blindly.
   name plus whatever details add after it. A leading filler `VAN` is dropped only when the column
   name proves it is not part of the name (`VAN DER MEULEN TOM`). Text before the column name, or a
   different name, fails the row.
+- **Foreign amount** (`reconcile_foreign_amount` in [reconcile.py](reconcile.py)): foreign amount
+  converted at the rate, plus all costs in EUR, must equal Bedrag to the cent, else the row fails.
+  Fintro writes the rate either way round (foreign per EUR or EUR per foreign, not fixed per
+  currency), so both are tried. The text itself stays in `notes` unchanged.
 - **Transaction type** (`reconcile_transaction_types` in [reconcile.py](reconcile.py)): column and
   details type are reduced to one; when both remain after the known rules, the row fails.
 
@@ -116,6 +121,12 @@ type, and an amount in details that exactly repeats the row amount (`EUR 1.234,5
 - The yearly loyalty bonus comes with type `Kosten rekeningbeheer`; its type becomes
   `Opbrengsten in verband met de rekening`.
 - Amounts inside details may carry thousands dots (`1.234,56`).
+- **Fintro misprints the exchange rate in its own exports**: the decimal point one place off, e.g.
+  `SEK 100,00 KOERS 1,000000 WISSELKOSTEN: 0,15 EUR` for -10,15 where `KOERS 10,000000` is meant
+  (100 / 10 + 0,15 = 10,15). Bedrag and the foreign amount are right; only the printed rate is
+  wrong. So the cent check also tries the rate x10 and /10. The originals are not corrected by
+  hand: a later export of the same period carries the misprint again, and the duplicate index
+  (which keeps Details) would then report the row as a conflict. `notes` keeps the rate as printed.
 - Dates are `dd/mm/yyyy`; Firefly would read them as US month/day, so the module writes ISO.
 
 ## Checking

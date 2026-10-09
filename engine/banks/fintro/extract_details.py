@@ -49,7 +49,7 @@ def extract_details(
     """
     remaining_details = details
 
-    details_booking_date = ""
+    details_interest_date = ""
     details_bank_reference = ""
     details_transaction_processing_date = ""
     details_description = ""
@@ -66,11 +66,11 @@ def extract_details(
     details_place = ""
     details_match_type = ""
 
-    # VALUTADATUM -> details_booking_date
-    RE_BOOKING_DATE = re.compile(r"VALUTADATUM\s*:\s*(\d{2}/\d{2}/\d{4})$")
-    match = RE_BOOKING_DATE.search(remaining_details)
+    # VALUTADATUM -> details_interest_date
+    RE_INTEREST_DATE = re.compile(r"VALUTADATUM\s*:\s*(\d{2}/\d{2}/\d{4})$")
+    match = RE_INTEREST_DATE.search(remaining_details)
     if match:
-        details_booking_date = parse_ddmmyyyy(match.group(1))
+        details_interest_date = parse_ddmmyyyy(match.group(1))
         remaining_details = remaining_details.replace(match.group(0), "").strip()
         record_step(trace, "VALUTADATUM", match.group(0), remaining_details)
 
@@ -416,7 +416,7 @@ def extract_details(
             raise ValueError(f"remaining_details should be empty instead of '{remaining_details}'")
 
     return {
-        "booking_date": details_booking_date,
+        "interest_date": details_interest_date,
         "bank_reference": details_bank_reference,
         "transaction_processing_date": details_transaction_processing_date,
         "description": details_description,

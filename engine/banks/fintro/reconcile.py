@@ -7,8 +7,9 @@ or merge, and raise on genuine conflicts.
 """
 
 import re
+from decimal import ROUND_HALF_UP, Decimal
 
-from engine.banks.fintro.parsers import normalize_for_comparison
+from engine.banks.fintro.parsers import normalize_for_comparison, parse_foreign_amount
 
 
 def merge_opposing_account_name(column_value: str, details_value: str) -> str:
@@ -195,3 +196,33 @@ def reconcile_transaction_types(
         )
 
     return column_transaction_type, details_transaction_type
+
+
+def reconcile_foreign_amount(
+    details_exchange_and_transaction_costs: str, column_amount: Decimal, column_account_currency_code: str
+) -> tuple[str, str]:
+    """
+    The amount in another currency from the details, checked against the column amount: converted
+    at the rate, plus the costs, it must give the column amount to the cent. Fintro writes the rate
+    either way round (USD per EUR, or EUR per USD), so both are tried; and it sometimes misprints
+    the rate's decimal point one place to the left or right, so the rate x10 and /10 are tried too.
+
+    Returns (foreign_amount, foreign_currency_code), the amount signed like column_amount;
+    ('', '') when the details hold no amount in another currency. Raises ValueError when the
+    amount has no rate or does not add up.
+    """
+    parsed = parse_foreign_amount(details_exchange_and_transaction_costs)
+    if not parsed or parsed[0] == column_account_currency_code:
+        return "", ""
+    currency, foreign_amount, rate, costs = parsed
+    if rate is None:
+        raise ValueError(f"Amount in {currency} without a rate: '{details_exchange_and_transaction_costs}'")
+    for candidate in (rate, rate * 10, rate / 10):
+        for converted in (foreign_amount / candidate, foreign_amount * candidate):
+            if (converted + costs).quantize(Decimal("0.01"), ROUND_HALF_UP) == abs(column_amount):
+                sign = "-" if column_amount < 0 else ""
+                return f"{sign}{foreign_amount}", currency
+    raise ValueError(
+        f"Amount in {currency} does not add up to the row amount {column_amount}: "
+        f"'{details_exchange_and_transaction_costs}'"
+    )

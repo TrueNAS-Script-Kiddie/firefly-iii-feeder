@@ -143,7 +143,7 @@ def build_split(
 
     for field, pattern in (
         ("primary_transaction_date", RE_DATE),
-        ("booking_date", RE_DATE),
+        ("interest_date", RE_DATE),
         ("transaction_processing_date", RE_DATE),
         ("payment_date", RE_DATE_OPTIONAL_TIME),
     ):
@@ -180,7 +180,7 @@ def build_split(
         "description": description,
         "notes": notes,
         "external_id": row.get("external_id", ""),
-        "book_date": row.get("booking_date", ""),
+        "interest_date": row.get("interest_date", ""),
         "process_date": row.get("transaction_processing_date", ""),
         "payment_date": row.get("payment_date", ""),
     }

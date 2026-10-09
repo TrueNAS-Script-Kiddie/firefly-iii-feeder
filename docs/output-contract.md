@@ -15,10 +15,12 @@ in that order. Every bank fills the same columns; empty means "not given by the 
 | `external_id` | the bank's own reference for the row | bank-specific (see "Keys") |
 | `primary_transaction_date` | the row's main date; which bank column it comes from is in the bank README | `YYYY-MM-DD` |
 | `transaction_processing_date` | the date the order was executed, when the bank gives it separately | `YYYY-MM-DD` |
-| `booking_date` | the value date (Valutadatum) | `YYYY-MM-DD` |
+| `interest_date` | the value date (Valutadatum): from/until when interest runs | `YYYY-MM-DD` |
 | `payment_date` | when the card was used, cash taken or deposited | `YYYY-MM-DD` or `YYYY-MM-DD HH:MM` |
 | `amount` | signed amount in the account currency: negative = money out | `-1234.56` |
 | `account_currency_code` | currency of the account | `EUR` (other currencies fail the row) |
+| `foreign_amount` | amount in another currency, when paid in one; checked against `amount` | `-1234.56`, signed like `amount`, or empty |
+| `foreign_currency_code` | currency of `foreign_amount` | `USD`, or empty |
 | `asset_account_iban` | the own account the row belongs to | IBAN without spaces |
 | `opposing_account_iban` | counterparty IBAN | IBAN without spaces, or empty |
 | `opposing_account_bic` | counterparty BIC | or empty |
@@ -56,7 +58,7 @@ The importer turns each row into one Firefly transaction (`build_split` in
 | Firefly field | From |
 |---|---|
 | `date` | `primary_transaction_date` |
-| `book_date` | `booking_date` |
+| `interest_date` | `interest_date` |
 | `process_date` | `transaction_processing_date` |
 | `payment_date` | `payment_date` |
 | `amount`, type | `amount` without sign; negative → withdrawal, positive → deposit; counterparty is an own account → transfer |
@@ -74,3 +76,4 @@ imported first; the other side's `external_id` and `notes` stay in its `data/imp
 | Date | Change |
 |---|---|
 | 2026-10-09 | First version, describing the output as it is. |
+| 2026-10-09 | `booking_date` renamed `interest_date`, sent to Firefly's `interest_date` instead of `book_date`. New columns `foreign_amount`, `foreign_currency_code` (not yet sent to Firefly). |

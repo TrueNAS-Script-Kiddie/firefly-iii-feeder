@@ -3,6 +3,7 @@ Pure parsing/formatting helpers for Fintro:
 - IBAN parsing/validation
 - Day-first date parsing ('dd/mm/yyyy' and 'dd/mm' with year fallback)
 - Amounts with a decimal comma and thousands dots ('1.234,56')
+- Amount in another currency with rate and costs
 - Structured reference (+++nnn/nnnn/nnnnn+++) handling
 - Accent-insensitive string comparison
 - Sequential string replacement
@@ -86,6 +87,29 @@ def parse_comma_decimal_amount(value: str) -> Decimal | None:
     if not re.fullmatch(r"\d{1,3}(?:\.\d{3})+,\d+|\d+,\d+", value):
         return None
     return Decimal(value.replace(".", "").replace(",", "."))
+
+
+RE_FOREIGN_AMOUNT = re.compile(
+    r"([A-Z]{3}) (\d{1,3}(?:\.\d{3})+,\d{2}|\d+,\d{2})"  # currency, amount
+    r"(?: KOERS (\d+,\d+))?"  # rate
+    r"((?: [A-Z]+: (?:\d{1,3}(?:\.\d{3})+|\d+),\d{2} EUR)*)"  # costs: WISSELKOSTEN: 0,47 EUR ...
+)
+
+
+def parse_foreign_amount(value: str) -> tuple[str, Decimal, Decimal | None, Decimal] | None:
+    """
+    'SEK 330,00 KOERS 11,497000 WISSELKOSTEN: 0,47 EUR' -> ('SEK', 330.00, 11.497000, 0.47 = sum of the costs).
+    None when the text does not start with an amount ('BEHANDELINGSKOSTEN: 4,71 EUR'); rate None when absent.
+    Raises ValueError when it starts with an amount but does not fit this form.
+    """
+    if not re.match(r"[A-Z]{3} \d", value):
+        return None
+    match = RE_FOREIGN_AMOUNT.fullmatch(value)
+    if not match:
+        raise ValueError(f"Amount in details in an unknown form: '{value}'")
+    costs = sum((parse_comma_decimal_amount(c) for c in re.findall(r": (\S+) EUR", match.group(4))), Decimal(0))
+    rate = parse_comma_decimal_amount(match.group(3)) if match.group(3) else None
+    return match.group(1), parse_comma_decimal_amount(match.group(2)), rate, costs
 
 
 def canonicalize_structured_ref(raw: str) -> str:
