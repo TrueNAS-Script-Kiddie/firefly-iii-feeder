@@ -1,6 +1,6 @@
 # Plan 00 — Archive and starting over
 
-Status: **in progress — steps 1–4 done; next: step 5 (`start-over.bash`).** To be carried out
+Status: **in progress — steps 1–5 done; next: step 6 (Fintro into the archive).** To be carried out
 before [plan 01](01-core-fintro-firefly.md) step 4 (its steps 0–3 are done) and before
 [plan 02](02-argenta.md). Examples are made up (public repo).
 
@@ -368,7 +368,7 @@ file with an unreachable remote (one alert, flag), another file (no alert), only
 only the flag with the remote back (pushed, flag gone), idle, `archive/` without `.git` (alert, file
 still archived). Regression 0 differences on 14,080 rows; idle on the server 1.9–2.0 ms.
 
-### Step 5 — `start-over.bash`
+### Step 5 — `start-over.bash` ✅
 
 In the feeder folder, no arguments, as the cron user. Git keeps scripts as `100644` and SFTP does
 not set the execute bit, so it is started with `bash`: from the root shell
@@ -386,6 +386,27 @@ run is the reload of plan 02 §4. Order as in §3.6:
    `data/incoming/` go back into the new `data/incoming/`.
 7. `archive/originals/**` and `archive/unprocessed/*` → `data/incoming/` (copies, flat folder).
 8. Releases the lock and says: cron does the rest (~1 hour), alerts by mail.
+
+As built, with choices not stated above:
+- Pushes right after its commit, before the wipe, also with nothing to commit (clears an old push
+  flag). A failure shows on screen and the flag goes into the new `data/`, so cron retries
+  silently; the wipe goes on, the commits are safe locally. Leaving it to the old flag alone would
+  push only after the next new archive commit, since a reload commits nothing.
+- Stops before the prompt when `app.env` lacks URL or token, `archive/` has no `.git`, or
+  `originals/` is empty (a wipe with nothing to load back).
+- Reads `app.env` with the rules of `load_env` instead of sourcing it; the token goes to `curl`
+  through stdin, not the process list.
+- `unprocessed/` is copied before `originals/`: a file in both under one name (a reload copy that
+  crashed) is the same export, and the `originals/` one wins.
+- Every stop says what state it leaves (before the wipe: nothing changed; after: rerun it).
+
+Tested in a copy, against a Firefly stub and a local bare origin: owner check, no `WIPE`, `401`
+(stops after the commit, `data/` untouched), `504` then `204` on every destroy, an old push flag
+(gone after the push), a waiting file (back in `incoming/`, after the archive copies), an old
+`data-before-start-over/` (replaced), the reload by the feeder (archive and commits unchanged, run
+ids kept, the hand-fixed export one file), an unreachable origin (flag in the new `data/`, cron
+silent, pushed once the origin is back), missing `app.env`, no `.git`, empty `originals/`, a held
+lock. Regression 0 differences on 14,080 rows.
 
 ### Step 6 — Fintro into the archive (you, on the server)
 
