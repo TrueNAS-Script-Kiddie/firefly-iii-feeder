@@ -5,7 +5,7 @@
 # rest, oldest arrival first. By hand, as the owner of this folder (the cron user):
 #   sudo -H -u <cron user> bash <app-ds>/firefly-iii-feeder/start-over.bash
 
-shopt -s nullglob globstar
+shopt -s nullglob
 
 if [[ "$0" == */* ]]; then
 	cd "${0%/*}" || exit 1
@@ -51,12 +51,19 @@ fi
 [[ -n "${FIREFLY_URL}" && -n "${FIREFLY_TOKEN}" ]] || stop "FIREFLY_URL or FIREFLY_TOKEN missing in ${APP_ENV}."
 [[ -d "${ARCHIVE_DIR}/.git" ]] || stop "${ARCHIVE_DIR} is not under git: set up its repo first (plan 00 step 2)."
 
+git=(git -c core.quotepath=off -C "${ARCHIVE_DIR}")
+# Only what the archive repo holds or the commit below adds: leftovers its .gitignore keeps out
+# (Thumbs.db, Office's ~$ lock files) stay behind
+mapfile -d '' -t archived < <("${git[@]}" ls-files -z --cached --others --exclude-standard -- originals unprocessed)
+wait $! || stop "git ls-files failed in ${ARCHIVE_DIR}; nothing changed."
 ORIGINALS=() UNPROCESSED=()
-for path in "${ARCHIVE_DIR}"/originals/**; do
-	[[ -f "${path}" ]] && ORIGINALS+=("${path}")
-done
-for path in "${ARCHIVE_DIR}"/unprocessed/*; do
-	[[ -f "${path}" ]] && UNPROCESSED+=("${path}")
+for path in "${archived[@]}"; do
+	# Tracked but deleted by hand: the commit below removes it
+	[[ -f "${ARCHIVE_DIR}/${path}" ]] || continue
+	case "${path}" in
+	originals/*) ORIGINALS+=("${ARCHIVE_DIR}/${path}") ;;
+	*) UNPROCESSED+=("${ARCHIVE_DIR}/${path}") ;;
+	esac
 done
 # Wiping with nothing to load back would leave Firefly empty
 ((${#ORIGINALS[@]})) || stop "${ARCHIVE_DIR}/originals/ holds no files: nothing to load back."
@@ -72,7 +79,6 @@ read -r -p 'Type WIPE to continue: ' answer
 [[ "${answer}" == WIPE ]] || stop "nothing changed."
 
 # Pending changes in the archive (a hand fix, §3.8 of plan 00) are part of what gets loaded
-git=(git -c core.quotepath=off -C "${ARCHIVE_DIR}")
 "${git[@]}" add -A || stop "git add failed in ${ARCHIVE_DIR}; nothing changed."
 changes=$("${git[@]}" diff --cached --name-status -M) || stop "git diff failed in ${ARCHIVE_DIR}; nothing changed."
 if [[ -n "${changes}" ]]; then

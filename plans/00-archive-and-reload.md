@@ -396,6 +396,9 @@ As built, with choices not stated above:
   `originals/` is empty (a wipe with nothing to load back).
 - Reads `app.env` with the rules of `load_env` instead of sourcing it; the token goes to `curl`
   through stdin, not the process list.
+- Copies only what the archive repo holds or its commit adds (`git ls-files --cached --others
+  --exclude-standard`), not every file on disk: leftovers `archive/.gitignore` keeps out
+  (`Thumbs.db`, Office's `~$` lock files, which can end in `.csv`) stay behind.
 - `unprocessed/` is copied before `originals/`: a file in both under one name (a reload copy that
   crashed) is the same export, and the `originals/` one wins.
 - Every stop says what state it leaves (before the wipe: nothing changed; after: rerun it).
@@ -406,7 +409,9 @@ Tested in a copy, against a Firefly stub and a local bare origin: owner check, n
 `data-before-start-over/` (replaced), the reload by the feeder (archive and commits unchanged, run
 ids kept, the hand-fixed export one file), an unreachable origin (flag in the new `data/`, cron
 silent, pushed once the origin is back), missing `app.env`, no `.git`, empty `originals/`, a held
-lock. Regression 0 differences on 14,080 rows.
+lock, a broken archive repo (stops), leftovers next to the exports (left behind), a new file with
+a space and an accent (copied), a tracked file deleted by hand (not copied, the commit removes it).
+Regression 0 differences on 14,080 rows.
 
 ### Step 6 — Fintro into the archive (you, on the server)
 
