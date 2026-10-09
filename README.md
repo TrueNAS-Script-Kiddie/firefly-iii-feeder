@@ -64,11 +64,13 @@ firefly-iii-feeder/
    - Skips a file until nothing has touched it for 30 s (its `ctime`, which
      copies with a preserved date still bump) and its last line is complete;
      the next cron run retries. Guards against half-copied uploads.
-   - Creates a timestamped logfile in `data/logs/`.
-   - Invokes `python3 -m engine.process_csv <csv> <timestamp> <logfile>`.
+   - Numbers the file within the run (`<run>` = run start + number) and
+     invokes `python3 -m engine.process_csv <csv> <run> <logfile>`.
 3. The Python engine loads the CSV, auto-detects the bank, validates and
-   maps columns, loads the account-specific duplicate index, and processes
-   each row: dedup → normalize → write temp output.
+   maps columns, names every output after bank, account and period of the
+   transactions (`<run>-<bank>-<account>-<first>_<last>-<stage>`), loads the
+   account-specific duplicate index, and processes each row: dedup →
+   normalize → write temp output.
 4. A single exit path (`completion.finalize`) moves the original CSV,
    commits the updated duplicate index, moves the normalized output, rotates
    backups, cleans the temp dir, logs, alerts on failure, and exits with an
@@ -107,7 +109,7 @@ Error" off so alerts on stderr are emailed.
 Direct (for debugging):
 
 ```bash
-PYTHONPATH=. python3 -m engine.process_csv <csv_path> <YYYYMMDD-HHMMSS> <logfile_path>
+PYTHONPATH=. python3 -m engine.process_csv <csv_path> <YYYYMMDD-HHMMSS-NNN> <logfile_path>
 PYTHONPATH=. python3 -m engine.firefly.import_normalized --dry-run --show 3
 # Why a row fails or is skipped: duplicate-index status, every parser step, the exact error
 PYTHONPATH=. python3 -m engine.banks.fintro.debug_row <csv> <line-or-Volgnummer>

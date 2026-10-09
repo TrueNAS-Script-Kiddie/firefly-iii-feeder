@@ -80,7 +80,7 @@ financetool (privé-repo); wat eenmalig per server is of niet via de API kan: me
 Elke stap: `pre-commit`, regressietest. Wat een stap op Fintro mag veranderen, staat bij de
 stap; al het andere moet nul verschillen geven.
 
-### Stap 0 — Documentatie herschikken
+### Stap 0 — Documentatie herschikken ✅ `781da6a`
 
 Eerst, zodat elke volgende stap meteen op de juiste plek documenteert. Alleen verhuizen en
 splitsen; geen nieuwe inhoud.
@@ -117,7 +117,7 @@ plans/NN-*.md                      tijdelijk (hieronder)
 4. **Plannen zijn tijdelijk**: na uitvoering gaan de blijvende feiten naar de bestanden hierboven
    en verdwijnt het plan (git bewaart het). AGENTS.md zegt dat in één regel.
 
-### Stap 1 — Bestandsnamen in `data/`
+### Stap 1 — Bestandsnamen in `data/` ✅
 
 Nu: `<ts>-<originele naam>-<fase>`. Twee problemen (nagekeken in de code en op de server):
 - De naam zegt niet welke rekening of periode (`CSV_2026-01-31-12.00`, verzonnen); alleen de
@@ -160,6 +160,16 @@ Nieuw: de naam beschrijft de inhoud, en is uniek door hoe hij gemaakt wordt.
 
 Fintro-regressie: nul verschillen (namen vallen buiten de test). Idle-meting herhalen.
 
+Uitgevoerd, met drie keuzes die hierboven nog niet stonden:
+- De periode komt uit `date_format` bij `primary_transaction_date` in de bank-yaml (de
+  datums zijn per bank anders geschreven; `engine/core/` kent geen banknamen).
+- Een run die start in een seconde die een eerdere run al gebruikte (handmatige run vlak na
+  een cronrun), laat het werk aan de volgende minuut: anders zouden beide met `-001` beginnen.
+- Bash noemt een origineel na een mislukte kritieke verplaatsing (exit 92–97)
+  `<run>-move-failed-<naam>`, na een crash `<run>-crashed-<naam>`.
+Getest in een kopie: Fintro-export, onbekend bestand, gesimuleerde crash, bezette seconde;
+regressie 0 verschillen op 14.080 rijen; idle op de server 1,9 ms.
+
 ### Stap 2 — Fintro: valutadatum en vreemde munt
 
 Apart, zodat de regressietest precies deze verschillen toont en niets anders:
@@ -170,7 +180,10 @@ Apart, zodat de regressietest precies deze verschillen toont en niets anders:
    de notities blijven ongewijzigd.
 
 Uitrollen als `data/normalized/` leeg is: een bestand dat daar nog met de oude kolomnaam
-wacht, zou zijn valutadatum verliezen. Wat al in Firefly staat, houdt `book_date` tot de
+wacht, zou zijn valutadatum verliezen. **Uitrollen = opslaan** (AGENTS.md "Deploy = save"):
+de SFTP-watcher zet elk opgeslagen bestand meteen op de server. Dus vóór de eerste bewerking
+op de server nakijken dat `data/incoming/` en `data/normalized/` leeg zijn en er geen
+`data/*.flag` wacht, en alle bestanden van deze stap snel na elkaar opslaan. Wat al in Firefly staat, houdt `book_date` tot de
 herlaadbeurt (plan 02).
 
 ### Stap 3 — Importer

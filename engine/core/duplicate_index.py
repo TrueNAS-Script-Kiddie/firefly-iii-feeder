@@ -84,8 +84,7 @@ def append_to_duplicate_index(duplicate_index_path: str, duplicate_index_rows: l
 def create_updated_duplicate_index(
     duplicate_index_path: str,
     backup_dir: str,
-    run_timestamp: str,
-    csv_filename: str,
+    run_id: str,
     duplicate_index_rows: list[dict[str, str]],
 ) -> tuple[str, list[str] | None]:
     """
@@ -98,11 +97,9 @@ def create_updated_duplicate_index(
     they were rewritten (else None).
     """
 
-    # Path for updated snapshot
+    # Path for updated snapshot: '<run>-<partition>-duplicate-index.csv'
     partition = os.path.splitext(os.path.basename(duplicate_index_path))[0].replace("-duplicate-index", "")
-    updated_duplicate_index = os.path.join(
-        backup_dir, f"{run_timestamp}-{os.path.splitext(csv_filename)[0]}-{partition}-duplicate-index.csv"
-    )
+    updated_duplicate_index = os.path.join(backup_dir, f"{run_id}-{partition}-duplicate-index.csv")
 
     # Base: existing dup-index or empty file
     old_columns = None
@@ -138,7 +135,8 @@ def rotate_duplicate_backups(
 ) -> None:
     """
     Rotate old duplicate-index backups by age and count, per account.
-    Backup names: <run_ts>-<csv name>-<partition>-duplicate-index.csv.
+    Backup names: <run>-<partition>-duplicate-index.csv, where <run> starts with the run
+    timestamp (older backups have the source name in between; the partition is always last).
     The newest backup of an account is always kept.
     Logs only on error. Never interrupts the processing flow.
     """

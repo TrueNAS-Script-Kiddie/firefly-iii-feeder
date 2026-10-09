@@ -33,13 +33,13 @@ def log_alert_exit(context: dict[str, Any], exit_code: int, message: str) -> Non
     log_event = context["log_event"]
     logfile_path = context["logfile_path"]
     csv_filename = context["csv_filename"]
-    run_timestamp = context["run_timestamp"]
+    run_id = context["run_id"]
 
     log_event(logfile_path, message)
 
     if exit_code != 0:
         subject, _, detail = message.partition("\n")
-        alert(subject, f"File: {csv_filename}\nTimestamp: {run_timestamp}\nLog: {logfile_path}\n{detail}".rstrip())
+        alert(subject, f"File: {csv_filename}\nRun: {run_id}\nLog: {logfile_path}\n{detail}".rstrip())
 
     sys.exit(exit_code)
 
@@ -84,8 +84,16 @@ def finalize(
 
     paths = context["paths"]
     csv_file_path = context["csv_file_path"]
-    csv_filename = context["csv_filename"]
-    run_timestamp = context["run_timestamp"]
+    run_id = context["run_id"]
+
+    # Give the log the name of the other outputs; bash created it before the bank was
+    # known. Not critical: on failure it keeps its first name.
+    named_log = os.path.join(os.path.dirname(context["logfile_path"]), f"{paths['output_base']}.log")
+    try:
+        os.replace(context["logfile_path"], named_log)
+        context["logfile_path"] = named_log
+    except OSError:
+        pass
     logfile_path = context["logfile_path"]
 
     # Rows that must be added to the duplicate-index for this run.
@@ -113,8 +121,7 @@ def finalize(
             updated_duplicate_index, old_columns = create_updated_duplicate_index(
                 paths["duplicate_index_csv"],
                 paths["duplicate_index_backup_dir"],
-                run_timestamp,
-                csv_filename,
+                run_id,
                 duplicate_index_rows_to_add,
             )
             if old_columns is not None:

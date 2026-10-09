@@ -3,14 +3,17 @@ import importlib
 import os
 import sys
 import traceback
+from datetime import datetime
 from typing import Any
 
 import engine.core.completion as completion
 from engine.core.csv_runtime import (
     build_paths,
+    describe_output,
     ensure_writer,
     load_all_bank_configs,
     load_csv_rows,
+    output_paths,
     write_failed_row,
 )
 from engine.core.csv_validation import (
@@ -54,24 +57,35 @@ CONFIG_DIR: str = os.path.join(BASE_DIR, "config")
 # -------------------------------------------------------------------------
 # Main pipeline
 # -------------------------------------------------------------------------
+def transaction_period(rows: list[dict[str, Any]], date_format: str | None) -> tuple[str, str]:
+    """First and last primary_transaction_date of the valid rows, ISO; ('', '') if unknown."""
+    if not date_format:
+        return "", ""
+    dates = []
+    for row in rows:
+        try:
+            dates.append(datetime.strptime(row.get("primary_transaction_date", ""), date_format).date())
+        except ValueError:
+            continue
+    if not dates:
+        return "", ""
+    return min(dates).isoformat(), max(dates).isoformat()
+
+
 def main() -> None:
     if len(sys.argv) != 4:
-        print("Usage: process_csv.py <csv_path> <run_timestamp> <logfile_path>")
+        print("Usage: process_csv.py <csv_path> <run_id> <logfile_path>")
         sys.exit(1)
 
     csv_file_path = sys.argv[1]
-    run_timestamp = sys.argv[2]
+    run_id = sys.argv[2]
     logfile_path = sys.argv[3]
     csv_filename = os.path.basename(csv_file_path)
 
     # ---------------------------------------------------------------------
     # BUILD PATHS → canonical paths[] dict
     # ---------------------------------------------------------------------
-    paths = build_paths(
-        data_dir=DATA_DIR,
-        run_timestamp=run_timestamp,
-        csv_filename=csv_filename,
-    )
+    paths = build_paths(data_dir=DATA_DIR, run_id=run_id, source_filename=csv_filename)
 
     # ---------------------------------------------------------------------
     # CONTEXT: pipeline state, passed on to completion.finalize
@@ -79,7 +93,7 @@ def main() -> None:
     context: dict[str, Any] = {
         "csv_file_path": csv_file_path,
         "csv_filename": csv_filename,
-        "run_timestamp": run_timestamp,
+        "run_id": run_id,
         "logfile_path": logfile_path,
         "paths": paths,
         "open_writers": [],
@@ -207,8 +221,20 @@ def main() -> None:
                 return
             index_filename = f"{partition_value}-duplicate-index.csv"
         else:
+            partition_value = ""
             index_filename = f"{bank_cfg['bank']}-duplicate-index.csv"
         paths["duplicate_index_csv"] = os.path.join(paths["duplicate_index_dir"], index_filename)
+
+        # -----------------------------------------------------------------
+        # Name every output after its content: bank, account, period
+        # -----------------------------------------------------------------
+        valid_rows = [r for r in validated_rows if "_validation_error" not in r]
+        date_format = bank_cfg["columns"]["required"].get("primary_transaction_date", {}).get("date_format")
+        first_date, last_date = transaction_period(valid_rows, date_format)
+        base = describe_output(run_id, bank_name, partition_value, first_date, last_date)
+        paths.update(output_paths(DATA_DIR, base, os.path.splitext(csv_filename)[1]))
+        period = f"{first_date} to {last_date}" if first_date else "unknown"
+        log_event(logfile_path, f"Account: {partition_value or '-'}, period: {period}, output: {base}")
 
         # -----------------------------------------------------------------
         # Load duplicate index

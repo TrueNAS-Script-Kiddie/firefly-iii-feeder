@@ -10,6 +10,8 @@ columns:
     primary_transaction_date:
       names: ["Uitvoeringsdatum"]
       regex: "^[0-9]{2}/[0-9]{2}/[0-9]{4}$"
+      # strptime format; gives the period in the output file names
+      date_format: "%d/%m/%Y"
 
     booking_date:
       names: ["Valutadatum"]

@@ -38,6 +38,21 @@ export PYTHONPATH="${BASE_DIR}"
 exec 9>"${LOCKFILE_PATH}"
 flock -n 9 || exit 0
 
+# Every output of a bank file starts with "<run start>-<file number in this run>", so names are
+# unique by construction. A run starting in the same second as an earlier one (a manual run
+# right after a cron run) would reuse those numbers: leave the work to the next minute.
+printf -v RUN_START '%(%Y%m%d-%H%M%S)T' -1
+TAKEN=("${LOG_DIR}/${RUN_START}-"*)
+((${#TAKEN[@]})) && exit 0
+FILE_NUMBER=0
+
+# Append to the log of the current file, whatever name Python gave it
+run_log() {
+	local logs=("${LOG_DIR}/${RUN_ID}".log "${LOG_DIR}/${RUN_ID}"-*.log) now
+	printf -v now '%(%F %T)T' -1
+	echo "${now} $*" >>"${logs[0]:-${LOG_DIR}/${RUN_ID}.log}"
+}
+
 for FILE_PATH in "${IN_DIR}"/*.csv; do
 	FILENAME="${FILE_PATH##*/}"
 
@@ -55,13 +70,13 @@ for FILE_PATH in "${IN_DIR}"/*.csv; do
 		continue
 	fi
 
-	# One timestamp/logfile per csv
-	RUN_TIMESTAMP="$(date '+%Y%m%d-%H%M%S')"
-	LOGFILE_PATH="${LOG_DIR}/${RUN_TIMESTAMP}-${FILENAME%.csv}.log"
+	# Python names the outputs once it knows bank, account and period; until then the
+	# log is "<run>.log", and the original's name is on its first line
+	FILE_NUMBER=$((FILE_NUMBER + 1))
+	printf -v RUN_ID '%s-%03d' "${RUN_START}" "${FILE_NUMBER}"
+	run_log "Processing file ${FILENAME}..."
 
-	echo "$(date '+%F %T') Processing file ${FILENAME}... " >>"${LOGFILE_PATH}"
-
-	python3 -m "${PYTHON_MODULE}" "${FILE_PATH}" "${RUN_TIMESTAMP}" "${LOGFILE_PATH}"
+	python3 -m "${PYTHON_MODULE}" "${FILE_PATH}" "${RUN_ID}" "${LOG_DIR}/${RUN_ID}.log"
 	EXIT_CODE="${?}"
 
 	case "${EXIT_CODE}" in
@@ -71,21 +86,22 @@ for FILE_PATH in "${IN_DIR}"/*.csv; do
 
 	1)
 		# Python crashed before cleanup (traceback on stderr) → bash must move the file
-		[[ -f "${FILE_PATH}" ]] && mv "${FILE_PATH}" "${FAILED_DIR}/${RUN_TIMESTAMP}-${FILENAME%.csv}-failed.csv"
-		echo "$(date '+%F %T') ${PYTHON_MODULE} crashed before cleanup (exit code 1)." >>"${LOGFILE_PATH}"
+		[[ -f "${FILE_PATH}" ]] && mv "${FILE_PATH}" "${FAILED_DIR}/${RUN_ID}-crashed-${FILENAME}"
+		run_log "${PYTHON_MODULE} crashed before cleanup (exit code 1)."
 		;;
 
 	9[2-7])
 		# Critical file operation error; Python already alerted. A file left in
 		# incoming would be retried (and alerted) every minute, so move it.
-		[[ -f "${FILE_PATH}" ]] && mv "${FILE_PATH}" "${FAILED_DIR}/${RUN_TIMESTAMP}-${FILENAME%.csv}-failed.csv"
-		echo "$(date '+%F %T') ${PYTHON_MODULE}: critical file operation error (exit code ${EXIT_CODE}), see above." >>"${LOGFILE_PATH}"
+		[[ -f "${FILE_PATH}" ]] && mv "${FILE_PATH}" "${FAILED_DIR}/${RUN_ID}-move-failed-${FILENAME}"
+		run_log "${PYTHON_MODULE}: critical file operation error (exit code ${EXIT_CODE}), see above."
 		;;
 
 	*)
 		# Unknown exit code → treat as Python crash; nobody else alerted, so stderr
-		[[ -f "${FILE_PATH}" ]] && mv "${FILE_PATH}" "${FAILED_DIR}/${RUN_TIMESTAMP}-${FILENAME%.csv}-failed.csv"
-		echo "$(date '+%F %T') ${PYTHON_MODULE} exited with unknown code ${EXIT_CODE}." | tee -a "${LOGFILE_PATH}" >&2
+		[[ -f "${FILE_PATH}" ]] && mv "${FILE_PATH}" "${FAILED_DIR}/${RUN_ID}-crashed-${FILENAME}"
+		run_log "${PYTHON_MODULE} exited with unknown code ${EXIT_CODE}."
+		echo "${PYTHON_MODULE} exited with unknown code ${EXIT_CODE} on ${FILENAME} (run ${RUN_ID})." >&2
 		;;
 	esac
 done

@@ -45,16 +45,33 @@ cd /tmp && time (for i in {1..30}; do bash -s < <app-ds>/firefly-iii-feeder/fire
 | [firefly-iii-feeder.bash](firefly-iii-feeder.bash) | Cron entry; `flock`, upload check (ctime ≥ 30 s + complete last line), normalizes each incoming CSV, then runs the importer |
 | `bank-csv-originals/` | Backup of every unique bank export, one subfolder per bank (`Fintro/`); source for regenerating `data/` |
 | `data/incoming/` | Drop CSVs here to trigger processing |
-| `data/normalized/` | Normalized output waiting for import (timestamped) |
-| `data/imported/` | Normalized files after import: `<ts>-<name>-imported.csv` (`-imported-partial` if any row of the bank CSV failed, in the normalizer or the import; `-imported-retry[-partial]` for a retried `-import-failed` file) |
-| `data/processed/` | Originals after processing (success / partial / failed) |
-| `data/failed/` | Rows that failed normalization, dedup, or import; whole files bash moved after a crash |
-| `data/duplicate-index/` | Per-account persistent dedup index (successfully normalized rows only) + backups rotated per account |
-| `data/logs/` | Per-run logs: `<ts>-<name>.log` (normalizer) and `<ts>-<name>-import.log` (mode, Firefly state read time, result and duration); `<ts>` = normalizer run, so all files of one bank CSV sort together. `<ts>-firefly-follow-up.log`: rules and running balances after a batch import, with durations |
+| `data/normalized/` | Normalized output waiting for import: `<base>-normalized[-partial].csv` |
+| `data/imported/` | Normalized files after import: `<base>-imported.csv` (`-imported-partial` if any row of the bank file failed, in the normalizer or the import; `-imported-retry[-partial]` for a retried `-import-failed` file) |
+| `data/processed/` | Originals after processing, own extension: `<base>-processed[-partial\|-failed].<ext>` |
+| `data/failed/` | Rows that failed normalization, dedup, or import (`<base>-normalize-failed.csv`, `-duplicate-failed.csv`, `-import-failed.csv`); whole originals bash moved: `<run>-crashed-<source name>` (Python crashed) or `<run>-move-failed-<source name>` (a critical file move failed) |
+| `data/duplicate-index/` | Per-account persistent dedup index (successfully normalized rows only) + backups `backups/<run>-<account>-duplicate-index.csv`, rotated per account |
+| `data/logs/` | `<base>.log` (normalizer) and `<base>-import.log` (mode, Firefly state read time, result and duration). `<time>-firefly-follow-up.log`: rules and running balances after a batch import, with durations |
 | `data/temp/` | Working files; cleaned up after each run, except after a critical error (it then holds the index rollback copy) |
+
+File names in `data/` describe the content: `<base>` = `<run>-<bank>-<account>-<first>_<last>`,
+e.g. `20261009-101500-001-fintro-BE68539007547034-2026-03-13_2026-10-07`, so all files of one
+bank file sort together. `<run>` = start of the cron run + the file's number in that run (unique
+by construction); `<first>_<last>` = first and last transaction date (`date_format` of
+`primary_transaction_date` in the bank config). Before the bank is known, `<base>` is
+`<run>-unknown-<source name>`, and the log is `<run>.log` until the normalizer renames it. The
+source name is on the log's first line.
 
 The token lives only in the server copy of `config/app.env` (mode 600); the
 SFTP watcher excludes that file, so a local copy is never uploaded over it.
+
+## Deploy = save
+
+The VS Code SFTP watcher (`.vscode/sftp.json`, local) uploads every saved file at
+once, so an edit runs on the server from the next cron minute — before any commit,
+and also when Claude saves it. A change to the normalized columns, to file names in
+`data/`, or to anything the importer reads must therefore be saved only while
+`data/incoming/` and `data/normalized/` on the server are empty and no
+`data/*.flag` is pending: check that first (read-only `ls`).
 
 ## Running
 
@@ -66,12 +83,12 @@ SFTP watcher excludes that file, so a local copy is never uploaded over it.
 # (stderr = alert email), with the encrypted-dataset lock-guard in the Command field
 
 # Normalizer only (debugging)
-PYTHONPATH=. python3 -m engine.process_csv <csv_path> <YYYYMMDD-HHMMSS> <logfile_path>
+PYTHONPATH=. python3 -m engine.process_csv <csv_path> <run> <logfile_path>   # <run>: YYYYMMDD-HHMMSS-NNN
 
 # Debug a row: whether the account's duplicate index already has it (then it is skipped,
 # or a conflict shows the differing fields), every parser step, the values found, the exact
 # failure. Run on the server: the index is in data/, which is not synced.
-# <line> = "source row" in the normalizer log <ts>-<name>.log, or a Volgnummer (reads only)
+# <line> = "source row" in the normalizer log <base>.log, or a Volgnummer (reads only)
 PYTHONPATH=. python3 -m engine.banks.fintro.debug_row <csv> <line-or-Volgnummer> [...]
 
 # Importer only; --dry-run builds every request but sends and moves nothing
@@ -103,6 +120,23 @@ synced) by placing a sample CSV in `data/incoming/`
 and inspecting `data/normalized/`, `data/failed/`, and `data/logs/` (failure
 reasons are in the normalizer log, not the `-import.log`); verify
 the importer with `--dry-run` on the server (the token lives there).
+
+Testing a change to `firefly-iii-feeder.bash` on the desktop (Git Bash): run it in
+a throwaway copy, never in the repo's own `data/`. Git Bash has no `flock`, so a stub
+stands in for it; the upload wait drops to 0 s; without `app.env` the importer ends
+with "FIREFLY IMPORT BLOCKED", as expected. Use the `/c/…` form for the folder: a `C:`
+in `PATH` splits it.
+
+```bash
+T=/c/Users/<you>/AppData/Local/Temp/feeder-test
+mkdir -p "$T/bin" "$T/repo/data/incoming"
+cp -r engine config firefly-iii-feeder.bash "$T/repo/"
+rm -f "$T/repo/config/app.env"
+sed -i 's/^UPLOAD_SETTLE_SECONDS=30/UPLOAD_SETTLE_SECONDS=0/' "$T/repo/firefly-iii-feeder.bash"
+printf '#!/bin/sh\nexit 0\n' >"$T/bin/flock" && chmod +x "$T/bin/flock"
+cp <sample export> "$T/repo/data/incoming/"
+cd "$T/repo" && PATH="$T/bin:$PATH" bash ./firefly-iii-feeder.bash
+```
 
 ## Exit Codes
 
@@ -174,7 +208,7 @@ re-importing a file is safe. Two modes, chosen per run (`BATCH_OLD_ROW_AGE_DAYS`
   failure alerts once; `data/firefly-follow-up-alerted.flag` keeps the retries
   every minute silent until the follow-up succeeds.
 
-Rows Firefly rejected go to `data/failed/<ts>-<name>-import-failed.csv`. Dropping the
+Rows Firefly rejected go to `data/failed/<base>-import-failed.csv`. Dropping the
 bank CSV again does not retry them: the duplicate index already has them. Fix the
 cause, then move that file to `data/normalized/`; the next run imports it (the
 alert names the exact paths).
@@ -279,7 +313,8 @@ cp bank-csv-originals/Fintro/*.csv data/incoming/
 ## Adding a New Bank
 
 1. Create `config/<bank>.yaml` — required/optional columns, regex rules,
-   filter values, `duplicate_key`. See [config/fintro.yaml](config/fintro.yaml).
+   filter values, `duplicate_key`, and `date_format` on `primary_transaction_date`
+   (else the file names carry no period). See [config/fintro.yaml](config/fintro.yaml).
    Bank name is derived from the filename by `load_all_bank_configs()`
    in [engine/core/csv_runtime.py](engine/core/csv_runtime.py) — no `bank:` field needed.
 2. Create the package `engine/banks/<bank>/`, exposing `normalize_row` in

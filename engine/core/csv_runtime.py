@@ -21,25 +21,19 @@ import yaml
 # ---------------------------------------------------------------------------
 # Prepare paths
 # ---------------------------------------------------------------------------
-def build_paths(
-    data_dir: str,
-    run_timestamp: str,
-    csv_filename: str,
-) -> dict[str, str]:
+def build_paths(data_dir: str, run_id: str, source_filename: str) -> dict[str, str]:
     """
     Construct all directory and file paths for a single pipeline run.
 
-    Note:
-    - duplicate_index_csv is a placeholder here.
-      The real account-specific path is set later in process_csv.py
-      once the bank is detected and validated rows are available.
+    Output names start as '<run>-unknown-<source name>': before the bank is known
+    the source name is the only clue. describe_output() replaces them once bank,
+    account and period are known; duplicate_index_csv is set then too.
     """
-
-    name_without_ext, _ = os.path.splitext(csv_filename)
+    stem, extension = os.path.splitext(source_filename)
 
     # ruff: noqa: E501
     # fmt: off
-    return {
+    paths = {
         # Directories
         "incoming_dir": os.path.join(data_dir, "incoming"),
         "processed_dir": os.path.join(data_dir, "processed"),
@@ -54,23 +48,39 @@ def build_paths(
         "duplicate_index_previous_csv": os.path.join(data_dir, "temp", "previous-duplicate-index.csv"),
 
         # Temporary normalized output
-        "temp_normalized_csv": os.path.join(data_dir, "temp", f"{run_timestamp}-{name_without_ext}.tmp.csv"),
-
-        # Failed rows
-        "failed_normalize_csv": os.path.join(data_dir, "failed", f"{run_timestamp}-{name_without_ext}-normalize-failed.csv"),
-        "failed_duplicate_csv": os.path.join(data_dir, "failed", f"{run_timestamp}-{name_without_ext}-duplicate-failed.csv"),
-
-        # Processed originals
-        "processed_failed_csv": os.path.join(data_dir, "processed", f"{run_timestamp}-{name_without_ext}-processed-failed.csv"),
-        "processed_partial_csv": os.path.join(data_dir, "processed", f"{run_timestamp}-{name_without_ext}-processed-partial.csv"),
-        "processed_success_csv": os.path.join(data_dir, "processed", f"{run_timestamp}-{name_without_ext}-processed.csv"),
-
-        # Normalized output
-        "normalized_partial_csv": os.path.join(data_dir, "normalized", f"{run_timestamp}-{name_without_ext}-normalized-partial.csv"),
-        "normalized_success_csv": os.path.join(data_dir, "normalized", f"{run_timestamp}-{name_without_ext}-normalized.csv"),
+        "temp_normalized_csv": os.path.join(data_dir, "temp", f"{run_id}.tmp.csv"),
     }
     # fmt: on
     # ruff: enable=E501
+    paths.update(output_paths(data_dir, f"{run_id}-unknown-{stem}", extension))
+    return paths
+
+
+def output_paths(data_dir: str, base: str, extension: str) -> dict[str, str]:
+    """Every file named after one bank file: '<base>-<stage>'. The original keeps its extension."""
+    return {
+        "output_base": base,
+        # Failed rows
+        "failed_normalize_csv": os.path.join(data_dir, "failed", f"{base}-normalize-failed.csv"),
+        "failed_duplicate_csv": os.path.join(data_dir, "failed", f"{base}-duplicate-failed.csv"),
+        # Processed originals
+        "processed_failed_csv": os.path.join(data_dir, "processed", f"{base}-processed-failed{extension}"),
+        "processed_partial_csv": os.path.join(data_dir, "processed", f"{base}-processed-partial{extension}"),
+        "processed_success_csv": os.path.join(data_dir, "processed", f"{base}-processed{extension}"),
+        # Normalized output
+        "normalized_partial_csv": os.path.join(data_dir, "normalized", f"{base}-normalized-partial.csv"),
+        "normalized_success_csv": os.path.join(data_dir, "normalized", f"{base}-normalized.csv"),
+    }
+
+
+def describe_output(run_id: str, bank: str, account: str, first_date: str, last_date: str) -> str:
+    """'<run>-<bank>-<account>-<first>_<last>'; parts that are unknown are left out."""
+    parts = [run_id, bank]
+    if account:
+        parts.append(account)
+    if first_date:
+        parts.append(f"{first_date}_{last_date}")
+    return "-".join(parts)
 
 
 # ---------------------------------------------------------------------------
