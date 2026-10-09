@@ -283,7 +283,9 @@ user, not to root.
 
 As built: key `id_ed25519_finance_data` and config `finance-data.config` in the cron user's
 `.ssh/`; `git init -b main` (the server's git defaults to `master`). With `sudo -u`, add `-H`, or git
-looks for its config in `/root`.
+looks for its config in `/root`. `archive/.gitignore` keeps out what Windows Explorer and Office
+leave behind through the share (`Thumbs.db`, `desktop.ini`, `~$*` lock files); the first run with
+work commits it.
 
 ### Step 3 — Archive in the normalizer ✅
 
