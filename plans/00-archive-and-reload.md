@@ -266,7 +266,7 @@ describes current behaviour and follows in step 7.
 No code; the only commit is marking the step done. Claude gives the exact commands, one block per
 item, and checks each result read-only (AGENTS.md "Server access"); you paste them in your root
 shell on the server. Every command that writes in the feeder folder or the cron user's home runs
-as that user (`sudo -u <cron user> …`), so the key, `archive/` and its `.git/` belong to the cron
+as that user (`sudo -H -u <cron user> …`), so the key, `archive/` and its `.git/` belong to the cron
 user, not to root.
 1. Locally (Claude, on the desktop): `archive` and `data-before-start-over` in the `ignore` of
    `.vscode/sftp.json` — first, so the watcher never touches them.
@@ -333,7 +333,7 @@ Prerequisite: step 2 done (`archive/` exists under git; `archive` in the SFTP `i
 
 In the feeder folder, no arguments, as the cron user. Git keeps scripts as `100644` and SFTP does
 not set the execute bit, so it is started with `bash`: from the root shell
-`sudo -u <cron user> bash <app-ds>/firefly-iii-feeder/start-over.bash`; the script `cd`s to its
+`sudo -H -u <cron user> bash <app-ds>/firefly-iii-feeder/start-over.bash`; the script `cd`s to its
 own folder, like `firefly-iii-feeder.bash`. Not run on the server in this step: its first real
 run is the reload of plan 02 §4. Order as in §3.6:
 1. Refuses to run as anyone but the owner of the feeder folder (so not as root), before touching

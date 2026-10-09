@@ -99,7 +99,7 @@ AI agents only read on the server (`ls`, `cat`, `stat`: `data/` and the token li
 there). Anything that writes — moving a file, a git command, `start-over.bash`, an install — is
 handed to the user as a plain command to paste. The user's shell there is root, while the cron
 job and every file in the feeder folder belong to the cron user. So a command that writes in the
-feeder folder runs as that user (`sudo -u <cron user> …`): a root-owned file in `data/` or
+feeder folder runs as that user (`sudo -H -u <cron user> …`; without `-H` git looks for its config in `/root`): a root-owned file in `data/` or
 `archive/` (git objects above all) breaks the next cron run.
 
 ## Running
