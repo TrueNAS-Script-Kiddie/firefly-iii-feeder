@@ -1,6 +1,6 @@
 # Plan 00 — Archive and starting over
 
-Status: **in progress — steps 1–3 done; next: step 4 (git in bash).** To be carried out
+Status: **in progress — steps 1–4 done; next: step 5 (`start-over.bash`).** To be carried out
 before [plan 01](01-core-fintro-firefly.md) step 4 (its steps 0–3 are done) and before
 [plan 02](02-argenta.md). Examples are made up (public repo).
 
@@ -335,7 +335,7 @@ unknown file twice, crash (exit 1), unknown exit code on a name with a run id, a
 invalid account, exit 94 and exit 97. Regression 0 differences on 14,080 rows; idle on the server
 1.97 ms.
 
-### Step 4 — Git in bash
+### Step 4 — Git in bash ✅
 
 1. After the importer, still under the lock, only in a run with work: if `archive/.git` exists,
    `git -C archive add -A`, a commit when something changed (message: the added, moved and changed
@@ -347,6 +347,24 @@ invalid account, exit 94 and exit 97. Regression 0 differences on 14,080 rows; i
 3. `archive/.git` missing → alert in every run with work ("archive not under git": step 2 is
    missing); the files still go into `archive/`.
 4. Measure idle again on the server, ≤ 2 ms (AGENTS.md "Idle cost"; a read-only command).
+
+As built, with choices not stated above:
+- `archive_to_git` runs in every run with work, so a hand fix made through the share is committed
+  by the next one. Commit message `Run <run start>: 1 added, 1 moved, …`, one line per path below.
+- `git push -q origin HEAD`: the branch has no upstream, so the first push creates `main` on Forgejo.
+- Git output is captured and shown only on failure: Forgejo may print `remote:` lines despite `-q`.
+- The script's exit code is now that of the git step, no longer the importer's (cron mails output,
+  not exit codes).
+- On the server, the repo's own `.git/config` carries identity and `sshCommand`; the cron user needs
+  no `~/.gitconfig` (checked with a minimal environment).
+- For step 5: the push flag lives in `data/` and moves aside with it, so `start-over.bash` must push
+  after its commit, or keep the flag.
+
+Tested in a copy (12 runs): new export, the same again (no commit), overlapping, unknown file,
+crash (exit 1), the crashed file again after the fix (commit shows a move), a hand fix plus a new
+file with an unreachable remote (one alert, flag), another file (no alert), only the flag (silent),
+only the flag with the remote back (pushed, flag gone), idle, `archive/` without `.git` (alert, file
+still archived). Regression 0 differences on 14,080 rows; idle on the server 1.9–2.0 ms.
 
 ### Step 5 — `start-over.bash`
 

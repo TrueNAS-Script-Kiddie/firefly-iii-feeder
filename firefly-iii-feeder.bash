@@ -13,8 +13,9 @@ BASE_DIR="${PWD}"
 IN_DIR="${BASE_DIR}/data/incoming"
 NORMALIZED_DIR="${BASE_DIR}/data/normalized"
 LOG_DIR="${BASE_DIR}/data/logs"
+ARCHIVE_DIR="${BASE_DIR}/archive"
 # Originals Python could not archive itself (it archives every other one)
-UNPROCESSED_DIR="${BASE_DIR}/archive/unprocessed"
+UNPROCESSED_DIR="${ARCHIVE_DIR}/unprocessed"
 # A name starting with a run id is a copy from the archive: it keeps that name
 ARRIVAL_RUN_ID='^[0-9]{8}-[0-9]{6}-[0-9]{3}-'
 
@@ -23,12 +24,14 @@ PYTHON_MODULE="engine.process_csv"
 LOCKFILE_PATH="${BASE_DIR}/.process.lock"
 # Set by the importer while a batch import still needs Firefly's follow-up
 RECALCULATE_FLAG="${BASE_DIR}/data/firefly-recalculate.flag"
+# Set while archive commits wait for a push (Forgejo unreachable); every run retries
+ARCHIVE_PUSH_FLAG="${BASE_DIR}/data/archive-push-pending.flag"
 UPLOAD_SETTLE_SECONDS=30
 INCOMPLETE_LINE_GRACE_SECONDS=600
 
-# Nothing to normalize, import or follow up → done
+# Nothing to normalize, import, follow up or push → done
 PENDING=("${IN_DIR}"/*.csv "${NORMALIZED_DIR}"/*.csv)
-((${#PENDING[@]})) || [[ -e "${RECALCULATE_FLAG}" ]] || exit 0
+((${#PENDING[@]})) || [[ -e "${RECALCULATE_FLAG}" ]] || [[ -e "${ARCHIVE_PUSH_FLAG}" ]] || exit 0
 
 # data/ and archive/ are not in git: on a fresh deploy logging and the fallback move would fail
 mkdir -p "${LOG_DIR}" "${UNPROCESSED_DIR}" || exit 1
@@ -63,6 +66,54 @@ archive_unprocessed() {
 	[[ "${name}" =~ ${ARRIVAL_RUN_ID} ]] || name="${RUN_ID}-${name}"
 	[[ -f "${FILE_PATH}" ]] || return 0
 	mv -f "${FILE_PATH}" "${UNPROCESSED_DIR}/${name}" && run_log "Original: ${UNPROCESSED_DIR}/${name}"
+}
+
+# Commit everything new in archive/ (this run's originals, hand fixes made through the share) and
+# push it. Git output is kept and shown only on failure: the cron job mails anything printed.
+archive_to_git() {
+	local git=(git -c core.quotepath=off -C "${ARCHIVE_DIR}") output changes kind path new_path summary body
+	local -A count=()
+	if [[ ! -d "${ARCHIVE_DIR}/.git" ]]; then
+		printf 'ARCHIVE NOT UNDER GIT: %s\nOriginals are archived, but not committed or pushed. Set up its git repo first.\n' \
+			"${ARCHIVE_DIR}/.git is missing" >&2
+		return
+	fi
+	if ! output=$("${git[@]}" add -A 2>&1) || ! changes=$("${git[@]}" diff --cached --name-status -M 2>&1); then
+		printf 'ARCHIVE NOT COMMITTED: git add or diff failed in %s\n%s\n%s\n' "${ARCHIVE_DIR}" "${output}" "${changes}" >&2
+		return
+	fi
+
+	if [[ -n "${changes}" ]]; then
+		while IFS=$'\t' read -r kind path new_path; do
+			case "${kind}" in
+			A) kind=added ;;
+			R*) kind=moved path="${path} -> ${new_path}" ;;
+			D) kind=removed ;;
+			*) kind=changed ;;
+			esac
+			count[${kind}]=$((${count[${kind}]:-0} + 1))
+			body+=$'\n'"${kind} ${path}"
+		done <<<"${changes}"
+		for kind in added moved changed removed; do
+			[[ -n "${count[${kind}]}" ]] && summary+=", ${count[${kind}]} ${kind}"
+		done
+		if ! output=$("${git[@]}" commit -q -F - 2>&1 <<<"Run ${RUN_START}: ${summary#, }"$'\n'"${body}"); then
+			printf 'ARCHIVE NOT COMMITTED: git commit failed in %s\n%s\n' "${ARCHIVE_DIR}" "${output}" >&2
+			return
+		fi
+	elif [[ ! -e "${ARCHIVE_PUSH_FLAG}" ]]; then
+		return
+	fi
+
+	# Unpushed commits stay local; the flag makes every next run push again, and alerts only once
+	if output=$("${git[@]}" push -q origin HEAD 2>&1); then
+		[[ -e "${ARCHIVE_PUSH_FLAG}" ]] && rm -f "${ARCHIVE_PUSH_FLAG}"
+		return 0
+	fi
+	[[ -e "${ARCHIVE_PUSH_FLAG}" ]] ||
+		printf 'ARCHIVE PUSH FAILED: %s\n%s\n\nThe commits stay in %s; every cron minute pushes again. No further alerts until a push succeeds.\n' \
+			"${ARCHIVE_DIR}" "${output}" "${ARCHIVE_DIR}" >&2
+	printf '%s\n' "${output}" >"${ARCHIVE_PUSH_FLAG}"
 }
 
 for FILE_PATH in "${IN_DIR}"/*.csv; do
@@ -125,3 +176,6 @@ NORMALIZED=("${NORMALIZED_DIR}"/*.csv)
 if ((${#NORMALIZED[@]})) || [[ -e "${RECALCULATE_FLAG}" ]]; then
 	python3 -m engine.firefly.import_normalized
 fi
+
+# Still under the flock: start-over.bash commits the archive too
+archive_to_git
