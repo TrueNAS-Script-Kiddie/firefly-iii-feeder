@@ -57,6 +57,8 @@ RECALCULATE_FLAG = os.path.join(DATA_DIR, "firefly-recalculate.flag")
 FOLLOW_UP_ALERTED_FLAG = os.path.join(DATA_DIR, "firefly-follow-up-alerted.flag")
 # Set by an unexpected crash, so the retry every cron minute alerts only once
 CRASHED_FLAG = os.path.join(DATA_DIR, "firefly-import-crashed.flag")
+# Excel's lock file next to a CSV opened through the share: not an output (skipped, as in bash)
+OFFICE_LOCK_PREFIX = "~$"
 
 # Per row, Firefly recalculates every later balance of the account (~2 ms per later
 # transaction): recent rows cost ~0.3 s, old rows seconds each. Batch costs ~0.2 s
@@ -503,7 +505,11 @@ def main() -> int:
 
 
 def import_all(args: argparse.Namespace) -> int:
-    files = args.files or sorted(glob.glob(os.path.join(NORMALIZED_DIR, "*.csv")))
+    files = args.files or sorted(
+        path
+        for path in glob.glob(os.path.join(NORMALIZED_DIR, "*.csv"))
+        if not os.path.basename(path).startswith(OFFICE_LOCK_PREFIX)
+    )
     # A pending batch follow-up is retried even when there is nothing new to import
     follow_up_pending = not args.dry_run and os.path.exists(RECALCULATE_FLAG)
     if not files and not follow_up_pending:

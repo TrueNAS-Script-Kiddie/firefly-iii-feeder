@@ -1,9 +1,11 @@
 #!/bin/bash
 
-shopt -s nullglob
+shopt -s nullglob extglob
 
 # Runs every minute: until there is work, use builtins only (no subshells, no
 # external commands, no Python).
+# Every *.csv glob below is !(~\$*).csv: Excel leaves a lock file "~$<name>.csv" next to a CSV
+# opened through the share. It is no export, and one left behind would end every idle run.
 
 # Ensure working directory is the project root (cron starts in /)
 if [[ "$0" == */* ]]; then
@@ -30,7 +32,7 @@ UPLOAD_SETTLE_SECONDS=30
 INCOMPLETE_LINE_GRACE_SECONDS=600
 
 # Nothing to normalize, import, follow up or push → done
-PENDING=("${IN_DIR}"/*.csv "${NORMALIZED_DIR}"/*.csv)
+PENDING=("${IN_DIR}"/!(~\$*).csv "${NORMALIZED_DIR}"/!(~\$*).csv)
 ((${#PENDING[@]})) || [[ -e "${RECALCULATE_FLAG}" ]] || [[ -e "${ARCHIVE_PUSH_FLAG}" ]] || exit 0
 
 # data/ and archive/ are not in git: on a fresh deploy logging and the fallback move would fail
@@ -116,7 +118,7 @@ archive_to_git() {
 	printf '%s\n' "${output}" >"${ARCHIVE_PUSH_FLAG}"
 }
 
-for FILE_PATH in "${IN_DIR}"/*.csv; do
+for FILE_PATH in "${IN_DIR}"/!(~\$*).csv; do
 	FILENAME="${FILE_PATH##*/}"
 
 	# Avoid processing files still being uploaded; the next cron run retries.
@@ -172,7 +174,7 @@ done
 # Import everything in data/normalized/ into Firefly III. Still under the flock,
 # so a long import never overlaps the next cron run. The importer alerts on
 # stderr itself.
-NORMALIZED=("${NORMALIZED_DIR}"/*.csv)
+NORMALIZED=("${NORMALIZED_DIR}"/!(~\$*).csv)
 if ((${#NORMALIZED[@]})) || [[ -e "${RECALCULATE_FLAG}" ]]; then
 	python3 -m engine.firefly.import_normalized
 fi

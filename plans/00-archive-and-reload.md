@@ -424,7 +424,8 @@ reload of plan 02 §4. The only commit is marking the step done.
 
 ### Step 7 — Documentation
 
-- **AGENTS.md**: "Idle cost" (the push flag also counts as work); "Key Directories" (`archive/`,
+- **AGENTS.md**: "Idle cost" (the push flag also counts as work; Excel's `~$` lock files in
+  `incoming/` and `normalized/` do not, and bash and the importer skip them); "Key Directories" (`archive/`,
   `failed-rows/`, no `processed/`, no `bank-csv-originals/`); file names; "Lint" and "Firefly III
   Import" (paths in `failed-rows/`, retrying as in §3.7); "Start Over" becomes `start-over.bash`:
   what it does, when, and what it does not restore (token, one-time setup); conflicts as in §3.8;
