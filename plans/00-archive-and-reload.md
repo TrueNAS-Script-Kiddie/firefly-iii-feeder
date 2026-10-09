@@ -1,6 +1,6 @@
 # Plan 00 — Archive and starting over
 
-Status: **in progress — step 1 done; next: step 2 (setup by hand).** To be carried out
+Status: **in progress — steps 1–2 done; next: step 3 (archive in the normalizer).** To be carried out
 before [plan 01](01-core-fintro-firefly.md) step 4 (its steps 0–3 are done) and before
 [plan 02](02-argenta.md). Examples are made up (public repo).
 
@@ -31,7 +31,8 @@ Becomes a hard rule in AGENTS.md (step 1):
 ## 2. Decisions
 
 1. ✅ **Archive repo on the server**: folder `archive/` in the feeder folder, its own git repo,
-   remote a private repo `firefly-iii-feeder-archive` on Forgejo. Git runs on TrueNAS itself (a
+   remote a private repo `finance-data` on Forgejo (later all personal finance data, not only
+   the feeder's; §7). Git runs on TrueNAS itself (a
    host binary, survives updates): the exports arrive there, so nothing travels back and forth to
    the desktop. Not in the public repo (`.gitignore`), not in the SFTP watcher (`ignore`).
 2. ✅ **Everything dropped in `incoming/` ends up in the archive**, also what the feeder cannot
@@ -260,7 +261,7 @@ The hard rule of §1 in AGENTS.md ("Rebuild from scratch"), with "Start Over" an
 duplicate-hash gotcha pointing to it, and a section "Server access". The rest of AGENTS.md
 describes current behaviour and follows in step 7.
 
-### Step 2 — Setup by hand (you, on the server)
+### Step 2 — Setup by hand (you, on the server) ✅
 
 No code; the only commit is marking the step done. Claude gives the exact commands, one block per
 item, and checks each result read-only (AGENTS.md "Server access"); you paste them in your root
@@ -269,7 +270,7 @@ as that user (`sudo -u <cron user> …`), so the key, `archive/` and its `.git/`
 user, not to root.
 1. Locally (Claude, on the desktop): `archive` and `data-before-start-over` in the `ignore` of
    `.vscode/sftp.json` — first, so the watcher never touches them.
-2. Forgejo (you, in its web UI): create the private repo `firefly-iii-feeder-archive`, empty.
+2. Forgejo (you, in its web UI): create the private repo `finance-data`, empty.
 3. A key for the cron user in its second home dir (`homedir-ds`, survives a TrueNAS update), with
    an ssh config holding the `forgejo` alias (`IdentityFile`, `IdentitiesOnly yes`,
    `UserKnownHostsFile` in that same folder, `BatchMode yes`, so cron never waits for a prompt);
@@ -277,8 +278,12 @@ user, not to root.
    to put Forgejo's host key in that `known_hosts`.
 4. `git init` in `archive/` (created here), with in `.git/config`: `core.sshCommand` =
    `ssh -F <that config>`, `user.name`/`user.email` of the private Forgejo identity, `origin` =
-   `git@forgejo:<owner>/firefly-iii-feeder-archive.git`. Check with a read-only
+   `git@forgejo:<owner>/finance-data.git`. Check with a read-only
    `git -C archive ls-remote origin` run as the cron user.
+
+As built: key `id_ed25519_finance_data` and config `finance-data.config` in the cron user's
+`.ssh/`; `git init -b main` (the server's git defaults to `master`). With `sudo -u`, add `-H`, or git
+looks for its config in `/root`.
 
 ### Step 3 — Archive in the normalizer
 
@@ -404,3 +409,7 @@ reload of plan 02 §4. The only commit is marking the step done.
   then archive and Forgejo are on one machine, with the hourly snapshots of `app-ds`.
 - At execution: does the share write into `archive/` as the cron user? If not, `safe.directory`
   or group permissions, so git and the feeder can read and move each other's files.
+- Once a finance app needs `finance-data` on TrueNAS too: a folder `finance-data/` next to the
+  feeder holds the clone, the archive moves into `finance-data/household/`, and `archive` becomes
+  a symlink to it. Samba does not follow a symlink out of its share (`wide links` off), so the
+  share then needs another route to that folder.
