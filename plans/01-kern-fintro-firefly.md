@@ -1,6 +1,7 @@
 # Plan 01 — Kern, Fintro en Firefly-inrichting
 
-Status: **goedgekeurd; eerst uit te voeren, vóór [plan 02 (Argenta)](02-argenta.md).**
+Status: **in uitvoering — stap 0 en 1 klaar, volgende: stap 2.** Eerst uit te voeren, vóór
+[plan 02 (Argenta)](02-argenta.md).
 Alles hier is niet Argenta-specifiek, maar plan 02 bouwt erop. Voorbeelden zijn verzonnen
 (publieke repo); echte rijen blijven in de terminal.
 
@@ -117,7 +118,7 @@ plans/NN-*.md                      tijdelijk (hieronder)
 4. **Plannen zijn tijdelijk**: na uitvoering gaan de blijvende feiten naar de bestanden hierboven
    en verdwijnt het plan (git bewaart het). AGENTS.md zegt dat in één regel.
 
-### Stap 1 — Bestandsnamen in `data/` ✅
+### Stap 1 — Bestandsnamen in `data/` ✅ `5a01be5`
 
 Nu: `<ts>-<originele naam>-<fase>`. Twee problemen (nagekeken in de code en op de server):
 - De naam zegt niet welke rekening of periode (`CSV_2026-01-31-12.00`, verzonnen); alleen de
@@ -176,8 +177,11 @@ Apart, zodat de regressietest precies deze verschillen toont en niets anders:
 1. `booking_date` → `interest_date` in `config/fintro.yaml`, `normalize.py`, `debug_row.py`,
    `NORMALIZED_FIELDNAMES` en `build_split`. Verwacht: elke Fintro-rij toont die hernoeming.
 2. Nieuwe normalized velden `foreign_amount` + `foreign_currency_code` uit de bestaande
-   wisselkoerstekst, met de rekencontrole van §1.3. Verwacht: de 29 rijen met een vreemd bedrag krijgen die twee velden;
-   de notities blijven ongewijzigd.
+   wisselkoerstekst, met de rekencontrole van §1.3. Ze komen **erbij, niet in de plaats van**:
+   de wisselkoerstekst blijft volledig in `notes` (eerste regel) en in
+   `unmapped_exchange_and_transaction_costs`, want daar staan ook koers en kosten, die de
+   nieuwe velden niet bevatten. Verwacht: de 29 rijen met een vreemd bedrag krijgen die twee
+   velden erbij; `notes` en `unmapped_*` blijven op elke rij ongewijzigd.
 
 Uitrollen als `data/normalized/` leeg is: een bestand dat daar nog met de oude kolomnaam
 wacht, zou zijn valutadatum verliezen. **Uitrollen = opslaan** (AGENTS.md "Deploy = save"):
