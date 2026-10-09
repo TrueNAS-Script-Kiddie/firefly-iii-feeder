@@ -1,6 +1,6 @@
 # Plan 00 — Archive and starting over
 
-Status: **in progress — steps 1–5 done; next: step 6 (Fintro into the archive).** To be carried out
+Status: **in progress — steps 1–6 done; next: step 7 (documentation).** To be carried out
 before [plan 01](01-core-fintro-firefly.md) step 4 (its steps 0–3 are done) and before
 [plan 02](02-argenta.md). Examples are made up (public repo).
 
@@ -413,7 +413,7 @@ lock, a broken archive repo (stops), leftovers next to the exports (left behind)
 a space and an accent (copied), a tracked file deleted by hand (not copied, the commit removes it).
 Regression 0 differences on 14,080 rows.
 
-### Step 6 — Fintro into the archive (you, on the server)
+### Step 6 — Fintro into the archive (you, on the server) ✅
 
 After steps 3 and 4 are live: Claude gives the command, you run it as the cron user —
 `bank-csv-originals/Fintro/*.csv` once into `data/incoming/`. All rows are already known, so
@@ -421,6 +421,13 @@ nothing goes to Firefly; the 16 files (all distinct, checked) go into `originals
 Forgejo. Then check `git -C archive log --stat` (read-only) and the repo in Forgejo. Bash ignores
 Argenta's xlsx and pdf until plan 02 step 1, so those stay in `bank-csv-originals/` until the
 reload of plan 02 §4. The only commit is marking the step done.
+
+As built: all 16 processed in one run, each `all_full_duplicates`, each archived under
+`originals/fintro/<account>/<run>-<first>_<last>-<sha8>.csv` (none dropped as a copy);
+`unprocessed/`, `failed-rows/` and the flags empty, no alert. Two archive commits, both pushed:
+the run before, still waiting out the 30 s upload check, committed the pending `.gitignore` on its
+own; the next one the 16 originals. A waiting run commits only when something in `archive/`
+changed, so this split happens only when a change there waits while an upload settles.
 
 ### Step 7 — Documentation
 
