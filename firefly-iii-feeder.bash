@@ -115,7 +115,7 @@ archive_to_git() {
 	fi
 
 	# Unpushed commits stay local; the flag makes every next run push again, and alerts only once
-	if output=$("${git[@]}" push -q origin HEAD 2>&1); then
+	if output=$("${git[@]}" push -q -u origin HEAD 2>&1); then
 		[[ -e "${ARCHIVE_PUSH_FLAG}" ]] && rm -f "${ARCHIVE_PUSH_FLAG}"
 		return 0
 	fi

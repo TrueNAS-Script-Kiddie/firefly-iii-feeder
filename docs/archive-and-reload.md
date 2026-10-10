@@ -284,7 +284,8 @@ Every command that writes in the feeder folder or the cron user's home runs as t
 
 1. Firefly III and its one-time setup (AGENTS.md "Firefly III Import", gotchas; "Root helper"),
    the own accounts with their IBANs, and the cron job.
-2. The feeder code in its folder, owned by the cron user.
+2. The feeder code in its folder, owned by the cron user, with `firefly-iii-feeder.bash`
+   executable: the cron job runs it directly (SFTP sets no execute bit, a git clone does).
 3. Setup steps 1–3 above; then, instead of `git init`, clone the archive and give the clone the
    same `.git/config` entries as step 4:
 

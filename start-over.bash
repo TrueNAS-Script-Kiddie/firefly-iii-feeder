@@ -93,7 +93,7 @@ fi
 # failure shows on screen now. A failed push only puts the flag in the new data/, so the cron job
 # retries silently; the commits are safe locally.
 push_failed=0
-if ! push_output=$("${git[@]}" push -q origin HEAD 2>&1); then
+if ! push_output=$("${git[@]}" push -q -u origin HEAD 2>&1); then
 	push_failed=1
 	printf 'Archive push failed; the cron job pushes again every minute:\n%s\n' "${push_output}" >&2
 fi
