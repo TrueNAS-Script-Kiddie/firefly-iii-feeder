@@ -79,6 +79,9 @@ EXIT_PARTIAL = 75
 
 TRANSFER_MATCH_DAYS = 7
 UNKNOWN_COUNTERPARTY = "(onbekend)"
+# A 5xx while Firefly answers GET about fails only that row; this many rows in a row means
+# Firefly cannot store anything (database full, migration): an outage, retried every minute
+ROW_5XX_OUTAGE_STREAK = 3
 
 RE_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 RE_DATE_OPTIONAL_TIME = re.compile(r"^\d{4}-\d{2}-\d{2}( \d{2}:\d{2})?$")
@@ -304,6 +307,7 @@ def import_file(
     dry_run: bool,
     show: int,
     run_note: str,
+    rows_5xx_in_a_row: collections.Counter,
 ) -> collections.Counter:
     name = os.path.basename(path)
     # '<base>-normalized[-partial].csv' or a retried '<base>-import-failed.csv' -> '<base>':
@@ -371,7 +375,15 @@ def import_file(
                 # keeps one row Firefly always crashes on from blocking every run
                 if exc.status is None or not firefly_answers(client):
                     raise FireflyUnavailableError(f"{name} line {line_no}: {exc}") from exc
+                rows_5xx_in_a_row["rows"] += 1
+                if rows_5xx_in_a_row["rows"] >= ROW_5XX_OUTAGE_STREAK:
+                    raise FireflyUnavailableError(
+                        f"{name} line {line_no}: {exc}; {ROW_5XX_OUTAGE_STREAK} rows in a row, "
+                        "although Firefly answers GET about: it cannot store anything"
+                    ) from exc
                 status, response = exc.status, {"message": "Firefly crashed on this row; it answers other requests"}
+            else:
+                rows_5xx_in_a_row["rows"] = 0
 
         if status == 200:
             counts[decision] += 1
@@ -563,10 +575,14 @@ def import_all(args: argparse.Namespace) -> int:
             elif batch:
                 # Before the first batch row, so an interruption still triggers the follow-up
                 open(RECALCULATE_FLAG, "w", encoding="utf-8").close()
+            # Across files: a write outage must not fail the first rows of every file
+            rows_5xx_in_a_row: collections.Counter = collections.Counter()
             for path in files:
                 if args.dry_run:
                     print(f"== {os.path.basename(path)}")
-                counts = import_file(path, client, assets, currencies, pool, batch, args.dry_run, args.show, run_note)
+                counts = import_file(
+                    path, client, assets, currencies, pool, batch, args.dry_run, args.show, run_note, rows_5xx_in_a_row
+                )
                 if args.dry_run:
                     print(f"  {dict(counts)}")
                 totals.update(counts)

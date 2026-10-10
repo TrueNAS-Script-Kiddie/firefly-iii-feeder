@@ -248,7 +248,9 @@ one `POST /api/v1/transactions`.
   stop the run and leave files in place, alerted once per outage via
   `data/firefly-import-blocked.flag`. A 5xx on a POST is first checked with
   `GET about` (`firefly_answers`): if Firefly answers, the row is the problem and
-  fails like any other rejection, so it cannot block every run. Any other
+  fails like any other rejection, so it cannot block every run; the third such row
+  in a row (`ROW_5XX_OUTAGE_STREAK`, counted across the run's files) is an outage
+  after all. Any other
   rejection fails only that row
   (to `data/failed-rows/<base>-import-failed.csv`) and the file moves to
   `data/imported/` as `<base>-imported-partial.csv`. A file the normalizer

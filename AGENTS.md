@@ -249,7 +249,8 @@ re-importing a file is safe. Two modes, chosen per run (`BATCH_OLD_ROW_AGE_DAYS`
 
 Rows Firefly rejected go to `data/failed-rows/<base>-import-failed.csv`, also a row
 Firefly answers with a 5xx while it answers `GET about` (so one row it crashes on cannot
-block every run; a 5xx with `about` failing too is an outage, exit 69). Dropping the
+block every run; a 5xx with `about` failing too, or the third such row in a row
+(`ROW_5XX_OUTAGE_STREAK`: Firefly cannot store anything), is an outage, exit 69). Dropping the
 bank CSV again does not retry them: the duplicate index already has them. Fix the
 cause, then move that file to `data/normalized/`; the next run imports it (the
 alert names the exact paths). Retrying other failures: [docs/archive-and-reload.md](docs/archive-and-reload.md),
