@@ -196,6 +196,11 @@ def build_split(
         value = row.get(field, "")
         if value and not pattern.match(value):
             raise ValueError(f"{field} not ISO: '{value}'")
+        try:
+            if value:
+                date.fromisoformat(value[:10])
+        except ValueError as exc:
+            raise ValueError(f"{field} is no date: '{value}' ({exc})") from None
     if not row.get("primary_transaction_date"):
         raise ValueError("primary_transaction_date is empty")
 
