@@ -32,7 +32,7 @@ def build_paths(data_dir: str, archive_dir: str, run_id: str, source_filename: s
 
     Output names start as '<run>-unknown-<source name>': before the bank is known
     the source name is the only clue. describe_output() replaces them once bank,
-    account and period are known; duplicate_index_csv and the archive folder are set then too.
+    account and period are known; row_state_csv and the archive folder are set then too.
     An original that is not finished goes to archive/unprocessed/ as '<run>-<source name>',
     a copy from the archive under its own name.
     """
@@ -45,12 +45,11 @@ def build_paths(data_dir: str, archive_dir: str, run_id: str, source_filename: s
         "failed_dir": os.path.join(data_dir, "failed-rows"),
         "normalized_dir": os.path.join(data_dir, "normalized"),
         "temp_dir": os.path.join(data_dir, "temp"),
-        "duplicate_index_dir": os.path.join(data_dir, "duplicate-index"),
-        "duplicate_index_backup_dir": os.path.join(data_dir, "duplicate-index", "backups"),
+        "row_state_dir": os.path.join(data_dir, "row-state"),
+        "row_state_backup_dir": os.path.join(data_dir, "row-state", "backups"),
 
-        # Duplicate index (placeholder, overwritten later)
-        "duplicate_index_csv": os.path.join(data_dir, "duplicate-index", "UNSET.csv"),
-        "duplicate_index_previous_csv": os.path.join(data_dir, "temp", "previous-duplicate-index.csv"),
+        # The account's row state (placeholder, set once the account is known)
+        "row_state_csv": os.path.join(data_dir, "row-state", "UNSET.csv"),
 
         # Temporary normalized output
         "temp_normalized_csv": os.path.join(data_dir, "temp", f"{run_id}.tmp.csv"),

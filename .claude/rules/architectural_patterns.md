@@ -22,14 +22,14 @@ ordered sequence. Each phase must succeed before the next begins:
    fatal: it goes to normalize-failed in the loop. Only all rows failing, or a
    file mixing several `partition_by` values, rejects the file (exit 65). All
    rows filtered is `all_filtered`: nothing to do, exit 0.
-4. **Resolve account-specific dedup-index path** — from `duplicate_key.partition_by`.
-5. **Load dedup index** — per-account persistent CSV
-   (`load_duplicate_index` in [engine/core/duplicate_index.py](../../engine/core/duplicate_index.py)).
+4. **Resolve the account's row-state path** — from `duplicate_key.partition_by`.
+5. **Load row state** — per-account persistent CSV
+   (`load_row_state` in [engine/core/row_state.py](../../engine/core/row_state.py)).
 6. **Per-row loop** — `extract_duplicate_key` → `classify_duplicate` → bank's
    `normalize_row` → write temp output.
 7. **Outcome classification** — `success` / `partial` / `all_failed` /
    `all_full_duplicates` / `all_filtered` / `structure_failed` / `error`.
-8. **Finalize** — single exit path for archiving the original, index commit, file moves, alert
+8. **Finalize** — single exit path for the output move, row-state commit, archiving the original, alert
    (`finalize` in [engine/core/completion.py](../../engine/core/completion.py)).
 
 ## 2. Single Exit Path (`completion.finalize`)
@@ -37,7 +37,7 @@ ordered sequence. Each phase must succeed before the next begins:
 `finalize()` is the **only** place that calls `sys.exit()` (apart from the
 argument check at the top of `main()`). Every code path
 (normal, error, structure failure, row-level failure) calls it, guaranteeing
-that archiving the original, index commits, file moves, writer cleanup, backup
+that the output move, row-state commit, archiving the original, writer cleanup, backup
 rotation, temp cleanup, and the failure alert always happen together. Outcomes map
 1:1 to exit codes and destinations: a finished outcome archives the original in
 `archive/originals/`, any other in `archive/unprocessed/`
@@ -55,8 +55,8 @@ Bank-specific behaviour lives in `config/<bank>.yaml` and
 - `duplicate_key.columns` / `duplicate_key.regex` — how to extract the dedup
   key from a row.
 - `duplicate_key.partition_by` — internal column whose value names the
-  per-account index file (`<VALUE>-duplicate-index.csv`). Falls back to
-  `<bank>-duplicate-index.csv` if absent.
+  account: its row-state file (`<VALUE>.csv`) and the first part of `row_key`.
+  Falls back to the bank name if absent.
 
 Bank name is derived from the YAML filename and injected as `cfg["bank"]` by
 `load_all_bank_configs` in [engine/core/csv_runtime.py](../../engine/core/csv_runtime.py).
@@ -101,61 +101,75 @@ cross-source decisions, cosmetic replacement, and final assembly of the
 The patterns and their order are bank-specific: see the bank's README (Fintro:
 "Parsing `Details`").
 
-## 7. Stateful In-Memory + Persistent Dedup Index
+## 7. Row State: Dedup Plus Firefly Id
 
-The dedup index is a `defaultdict[str, list[dict]]` loaded from a per-account
-CSV at the start of each run. A row enters the index only after
-`normalize_row` succeeded, so failed rows are retried when their CSV is
-processed again. New rows are appended to the in-memory dict during the loop so
-that intra-batch duplicates are caught before the index is committed, which
-happens only for `success` / `partial` runs.
+[engine/core/row_state.py](../../engine/core/row_state.py). One CSV per account,
+`data/row-state/<account>.csv` (`<account>` = the `duplicate_key.partition_by`
+value, else the bank name; the same as the first part of `row_key`), with
+`duplicate_key`, `firefly_id` and the `columns.required` values of every bank row
+the feeder knows.
 
-The index filename is `<partition_value>-duplicate-index.csv` (e.g.
-`BE12345678901234-duplicate-index.csv`), derived from
-`duplicate_key.partition_by` in the YAML (see pattern 3). If `partition_by`
-is absent, it falls back to `<bank>-duplicate-index.csv`.
+- **The normalizer** loads it as a `defaultdict[str, list[dict]]` at the start of
+  each file. A row enters it only after `normalize_row` succeeded, so failed rows
+  are retried when their CSV is processed again. New rows are appended to the
+  in-memory dict during the loop, so intra-batch duplicates are caught too;
+  `finalize` commits the new rows (`firefly_id` empty) only for `success` /
+  `partial`.
+- **The importer** (`record_import`, per file, before the file moves) fills
+  `firefly_id`: the Firefly transaction the row created, or the transfer it
+  claimed, or the one Firefly named as duplicate. A row Firefly refused is removed
+  again, so the next export holding it retries it. A row whose `firefly_id` is set
+  is never sent again.
+- **Transfer sides**: a transfer's side is used when a row of that account has its
+  id as `firefly_id` (`load_transfer_pool`), so a side is claimed at most once ever,
+  across runs (§13).
 
-`classify_duplicate()` in [engine/core/duplicate_index.py](../../engine/core/duplicate_index.py)
-returns:
+`classify_duplicate()` returns:
 - `new` — key not seen.
 - `identical` — key seen, all required fields match → silently skip.
 - `conflict` — key seen, required fields differ → write to duplicate-failed.
 
-The index columns are `duplicate_key` + `columns.required`. When the config's
-required columns change, the next commit rewrites the index with the new
-columns (logged): a removed column is dropped, an added one is `<not recorded>`
-(`NOT_RECORDED`) for the old rows and skipped when comparing them, so no
-re-import is needed.
+When the config's required columns change, the next commit rewrites the state with
+the new columns (logged): a removed column is dropped, an added one is
+`<not recorded>` (`NOT_RECORDED`) for the old rows and skipped when comparing them,
+so no re-import is needed.
 
-The index is committed at the end: snapshot (timestamped copy in
-`backups/`) → atomic copy-to-live (temp file + `os.replace`, `copy_atomically`)
-→ rotate backups (`rotate_duplicate_backups`, per account: at most
-`MAX_BACKUPS=50`, none older than `MAX_BACKUP_AGE_DAYS=365`, newest always kept). A rollback copy
-(`previous-duplicate-index.csv` in `data/temp/`) allows recovery if the
-normalized-output move fails — see step 4 of `finalize`.
+Commit (`finalize` step 3): the updated state is prepared in `data/temp/`
+(`create_updated_row_state`), replaces the live file atomically (temp file +
+`os.replace`, `copy_atomically`), then a copy goes to `backups/<run>-<account>.csv`
+(`rotate_backups`, per account: at most `MAX_BACKUPS=50`, none older than
+`MAX_BACKUP_AGE_DAYS=365`, newest always kept). The importer's updates replace the
+file the same way, without a backup.
 
-## 8. Tiered Error Criticality
+## 8. Tiered Error Criticality and Finalize Order
 
-The step-numbered blocks inside `finalize()` in
-[engine/core/completion.py](../../engine/core/completion.py) distinguish:
+`finalize()` in [engine/core/completion.py](../../engine/core/completion.py) runs:
+1. prepare the updated row state in `data/temp/` (critical, 97);
+2. move the normalized output to `data/normalized/` (critical, 92);
+3. replace the live row state, then back it up (critical, 93; backup not critical);
+4. archive the original (critical, 94), last;
+5. remove a finished original's copies from `archive/unprocessed/`; rotate backups;
+   clean `data/temp/` (all not critical).
+
+Until step 4 the original stays in `data/incoming/`, so a run interrupted hard
+(reboot, kill) is simply redone by the next one: after step 2 the output is made
+twice and the importer skips the rows already recorded; after step 3 every row is
+`identical` and the original is archived.
 
 - **Non-critical** (wrap in try/except, log, continue): removing a finished
-  original's copies from `archive/unprocessed/`, backup rotation, temp cleanup,
+  original's copies from `archive/unprocessed/`, backup and rotation, temp cleanup,
   logging itself.
-- **Critical** (attempt compensating move, alert, exit): archiving the original
-  (exit 94), duplicate-index commit (93), normalized output move (92),
-  duplicate-index prep (97).
+- **Critical** (compensate, alert, exit): the original goes to
+  `archive/unprocessed/`, so it is not retried every minute and can be dropped in
+  again. At 93 the output is also taken out of `data/normalized/` again (the
+  importer runs only after every bank file, so it has not seen it). At 94 the rows
+  are already recorded; dropped in again, the original is `identical` and archived.
 - **Catastrophic** (exit 99): unhandled exception anywhere in the pipeline.
-
-Non-critical failures never interrupt the happy path. Critical failures
-always attempt a compensating action (move the original to
-`archive/unprocessed/`, so it can be dropped in again; roll back the index from
-`previous-duplicate-index.csv`) before exiting.
 
 ## 9. Context Dict as Pipeline State
 
 A single `context` dict is threaded through all phases and into `finalize()`.
-It carries `paths`, `open_writers`, `duplicate_index_rows_to_add`,
+It carries `paths`, `open_writers`, `row_state_rows_to_add`,
 `log_event`, and the run id. This avoids module-global state while
 keeping the pipeline callable as a unit — see `main()` in
 [engine/process_csv.py](../../engine/process_csv.py).
@@ -170,7 +184,7 @@ in it; this gives a complete audit trail without a database.
 
 - **Unique by construction**: `<run>` = start of the cron run
   (`YYYYMMDD-HHMMSS`, `RUN_TS_FORMAT` in
-  [engine/core/duplicate_index.py](../../engine/core/duplicate_index.py)) + the
+  [engine/core/row_state.py](../../engine/core/row_state.py)) + the
   file's number in that run, generated by
   [firefly-iii-feeder.bash](../../firefly-iii-feeder.bash) with builtins. A run
   starting in a second already used by an earlier run leaves the work to the
@@ -241,8 +255,9 @@ one `POST /api/v1/transactions`.
 - **Own transfers: match or create** — both accounts' CSVs carry the same
   movement; the first side creates the transfer, the other claims it
   (`claim_transfer`: same accounts, amount, ±`TRANSFER_MATCH_DAYS`, one claim
-  per side). Robust to file order and unequal history coverage. The claiming
-  side's own fields (`external_id`, `row_key`, notes) are not added to the transfer.
+  per side, ever: the row state records which row used which transfer, §7).
+  Robust to file order and unequal history coverage. The claiming side's own
+  fields (`external_id`, `row_key`, notes) are not added to the transfer.
 - **Run-level vs row-level failure** — `FireflyAuthError` /
   `FireflyUnavailableError` ([engine/firefly/api.py](../../engine/firefly/api.py))
   stop the run and leave files in place, alerted once per outage via
@@ -254,8 +269,8 @@ one `POST /api/v1/transactions`.
   rejection fails only that row
   (to `data/failed-rows/<base>-import-failed.csv`) and the file moves to
   `data/imported/` as `<base>-imported-partial.csv`. A file the normalizer
-  already marked `-normalized-partial` also ends up `-imported-partial`. Retry:
-  move the `-import-failed.csv` into `data/normalized/` (→ `-imported-retry`).
+  already marked `-normalized-partial` also ends up `-imported-partial`. A failed
+  row leaves the row state again: the next export holding it retries it.
   An unexpected exception (a bug) also leaves the files in place: its traceback
   is alerted once via `data/firefly-import-crashed.flag` (exit 70).
 - **Mode per run** — per row for recent data, batch (`batch_submission`) when

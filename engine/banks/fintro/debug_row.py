@@ -1,6 +1,6 @@
 """
 Show how Fintro rows are taken apart: the mapped columns, whether the
-account's duplicate index already has the row (then the normalizer skips it),
+account's row state already has the row (then the normalizer skips it) and its Firefly id,
 every step of the details parser (what it cut off, what was left), the values
 it found, and the final result or the exact reason the row fails.
 
@@ -21,10 +21,10 @@ from engine.banks.fintro.extract_details import extract_details
 from engine.banks.fintro.parsers import parse_ddmmyyyy
 from engine.core.csv_runtime import load_all_bank_configs, load_csv_rows
 from engine.core.csv_validation import autodetect_bank, extract_duplicate_key, validate_and_prepare
-from engine.core.duplicate_index import NOT_RECORDED, classify_duplicate, load_duplicate_index
+from engine.core.row_state import FIREFLY_ID, NOT_RECORDED, classify_duplicate, load_row_state, state_filename
 from engine.core.runtime import BASE_DIR
 
-DUPLICATE_INDEX_DIR = os.path.join(BASE_DIR, "data", "duplicate-index")
+ROW_STATE_DIR = os.path.join(BASE_DIR, "data", "row-state")
 
 SHOWN_COLUMNS = [
     "external_id",
@@ -39,36 +39,38 @@ SHOWN_COLUMNS = [
 ]
 
 
-def show_duplicate_status(row: dict, bank_cfg: dict, indexes: dict) -> None:
-    """The normalizer's duplicate check for this row, as process_csv does it."""
+def show_duplicate_status(row: dict, bank_cfg: dict, states: dict) -> None:
+    """The normalizer's duplicate check for this row, as process_csv does it, and its Firefly id."""
     partition_by = bank_cfg.get("duplicate_key", {}).get("partition_by")
     partition = row.get(partition_by, "").replace(" ", "").upper() if partition_by else bank_cfg["bank"]
-    index_path = os.path.join(DUPLICATE_INDEX_DIR, f"{partition}-duplicate-index.csv")
-    print("-- duplicate index")
-    if not os.path.exists(index_path):
-        print(f"   no index at {index_path}: the row counts as new")
+    state_path = os.path.join(ROW_STATE_DIR, state_filename(partition))
+    print("-- row state")
+    if not os.path.exists(state_path):
+        print(f"   no row state at {state_path}: the row counts as new")
         return
-    if index_path not in indexes:
-        indexes[index_path] = load_duplicate_index(index_path)
+    if state_path not in states:
+        states[state_path] = load_row_state(state_path)
     key = extract_duplicate_key(row, bank_cfg)
-    status = classify_duplicate(indexes[index_path], key, row, bank_cfg) if key else "no key"
+    status = classify_duplicate(states[state_path], key, row, bank_cfg) if key else "no key"
     if status == "new":
-        print(f"   new: key {key} is not in the index")
+        print(f"   new: key {key} is not in the row state")
     elif status == "identical":
-        print(f"   identical: key {key} is in the index with the same values -> the normalizer skips it")
+        firefly_id = states[state_path][key][0].get(FIREFLY_ID) or "none yet (waits in data/normalized/)"
+        print(f"   identical: key {key} is in the row state with the same values -> the normalizer skips it")
+        print(f"   Firefly transaction: {firefly_id}")
     elif status == "no key":
         print("   no duplicate key could be extracted -> the normalizer fails the row (duplicate-failed)")
     else:
-        print(f"   conflict: key {key} is in the index with other values -> the normalizer fails it (duplicate-failed)")
-        for existing in indexes[index_path][key]:
+        print(f"   conflict: key {key} is in the row state with other values -> the normalizer fails it")
+        for existing in states[state_path][key]:
             for field in bank_cfg["columns"]["required"]:
-                indexed = existing.get(field, NOT_RECORDED)
-                if indexed != NOT_RECORDED and indexed.strip() != row.get(field, "").strip():
-                    print(f"   {field:<26} index {indexed!r}")
+                recorded = existing.get(field, NOT_RECORDED)
+                if recorded != NOT_RECORDED and recorded.strip() != row.get(field, "").strip():
+                    print(f"   {field:<26} state {recorded!r}")
                     print(f"   {'':<26} csv   {row.get(field, '')!r}")
 
 
-def show_row(row: dict, bank_cfg: dict, indexes: dict) -> None:
+def show_row(row: dict, bank_cfg: dict, states: dict) -> None:
     for field in SHOWN_COLUMNS:
         print(f"   {field:<26} {row.get(field, '')!r}")
 
@@ -76,7 +78,7 @@ def show_row(row: dict, bank_cfg: dict, indexes: dict) -> None:
         print(f"-- FAILS before parsing: {row['_validation_error']}")
         return
 
-    show_duplicate_status(row, bank_cfg, indexes)
+    show_duplicate_status(row, bank_cfg, states)
 
     print("-- details parser, step by step")
     trace: list[tuple[str, str, str]] = []
@@ -120,7 +122,7 @@ def main() -> int:
     bank_cfg = autodetect_bank(raw_rows, load_all_bank_configs(os.path.join(BASE_DIR, "config")))
     validated_rows, column_map, _ = validate_and_prepare(raw_rows, bank_cfg)
     by_line = {row["_source_line"]: row for row in validated_rows}
-    indexes: dict = {}  # index path -> loaded index, read once
+    states: dict = {}  # row-state path -> loaded state, read once
 
     # Arguments: line numbers, or Volgnummers resolved to their line(s) among all raw rows
     lines: set[int] = set()
@@ -139,7 +141,7 @@ def main() -> int:
         print(f"== line {line} of {os.path.basename(path)}")
         row = by_line.get(line)
         if row is not None:
-            show_row(row, bank_cfg, indexes)
+            show_row(row, bank_cfg, states)
         elif 2 <= line <= len(raw_rows) + 1:
             raw = raw_rows[line - 2]
             print(f"   filtered out (Volgnummer {raw.get('Volgnummer')!r}, Status {raw.get('Status')!r})")

@@ -2,9 +2,9 @@
 Completion module:
 Handles ALL end-of-processing operations:
 - Closing open file handles
-- Duplicate index update + backup + atomic commit + rotation
-- Archiving the original (archive/originals/ or archive/unprocessed/)
+- Row-state update (prepared in data/temp/, then atomic replace) + backup + rotation
 - Moving normalized output
+- Archiving the original (archive/originals/ or archive/unprocessed/), last
 - Cleaning up the temp directory
 - Final log + alert (on failure) + exit
 
@@ -18,10 +18,7 @@ import sys
 import traceback
 from typing import Any
 
-from engine.core.duplicate_index import (
-    create_updated_duplicate_index,
-    rotate_duplicate_backups,
-)
+from engine.core.row_state import create_updated_row_state, rotate_backups
 from engine.core.runtime import alert
 
 # Python finished the file, however many rows succeeded: the original is real bank data for
@@ -80,9 +77,9 @@ def archived_copies(folder: str, sha256: str, name_suffix: str | None = None) ->
 
 def move_to_unprocessed(context: dict[str, Any], path: str | None) -> None:
     """
-    Compensating move after a critical failure: the original's rows were not recorded, so it
-    must be dropped in again. Nothing to move when it was dropped as already archived; a copy
-    whose content unprocessed/ already holds is dropped too.
+    Move the original to archive/unprocessed/ after a critical failure, so it is not retried
+    every minute and can be dropped in again. Nothing to move when it was dropped as already
+    archived; a copy whose content unprocessed/ already holds is dropped too.
     """
     target = context["paths"]["archive_unprocessed"]
     try:
@@ -151,9 +148,7 @@ def finalize(
         pass
     logfile_path = context["logfile_path"]
 
-    # Rows that must be added to the duplicate-index for this run.
-    # These are prepared in process_csv.py and are independent of normalized output.
-    duplicate_index_rows_to_add: list[dict[str, Any]] = context.get("duplicate_index_rows_to_add", [])
+    row_state_rows_to_add: list[dict[str, Any]] = context.get("row_state_rows_to_add", [])
 
     # ----------------------------------------------------------------------
     # 0. Close writers before any file is moved: a file must not move while
@@ -162,46 +157,96 @@ def finalize(
     # ----------------------------------------------------------------------
     close_open_writers(context)
 
-    # ----------------------------------------------------------------------
-    # 1. Prepare duplicate-index update (critical: without it the rows would
-    #    be normalized but never recorded, and reprocessed next time)
-    # ----------------------------------------------------------------------
-    updated_duplicate_index = None
+    # Until step 4 the original stays in data/incoming/: an interrupted run (reboot, kill) is
+    # redone by the next one. A critical failure moves it to archive/unprocessed/ instead.
 
+    # ----------------------------------------------------------------------
+    # 1. Prepare the account's updated row state in data/temp/ (critical).
+    #    Only when the normalized output is kept: a crashed run discards it,
+    #    so its rows must not be marked as seen. The live state is untouched.
+    # ----------------------------------------------------------------------
+    updated_row_state = None
     try:
-        # Only prepare an updated duplicate-index snapshot when there are
-        # new rows to add and their normalized output is kept. A crashed run
-        # discards its output, so its rows must not be marked as seen.
-        if duplicate_index_rows_to_add and outcome in ("success", "partial"):
-            updated_duplicate_index, old_columns = create_updated_duplicate_index(
-                paths["duplicate_index_csv"],
-                paths["duplicate_index_backup_dir"],
+        if row_state_rows_to_add and outcome in ("success", "partial"):
+            updated_row_state, old_columns = create_updated_row_state(
+                paths["row_state_csv"],
+                paths["temp_dir"],
                 run_id,
-                duplicate_index_rows_to_add,
+                row_state_rows_to_add,
             )
             if old_columns is not None:
-                new_columns = list(duplicate_index_rows_to_add[0].keys())
+                new_columns = list(row_state_rows_to_add[0].keys())
                 context["log_event"](
                     logfile_path,
-                    "Duplicate index columns follow the config now: "
+                    "Row-state columns follow the config now: "
                     f"added {[c for c in new_columns if c not in old_columns]} (old rows: not recorded), "
                     f"removed {[c for c in old_columns if c not in new_columns]}",
                 )
     except Exception as e:
+        move_to_unprocessed(context, csv_file_path)
         log_alert_exit(
             context,
             97,
-            f"DUPLICATE INDEX PREP ERROR: {e}\n\nTraceback:\n{traceback.format_exc()}",
+            f"ROW STATE PREP ERROR: {e}\n\nTraceback:\n{traceback.format_exc()}",
         )
 
     # ----------------------------------------------------------------------
-    # 2. Archive the original (critical). Finished → archive/originals/
+    # 2. Move normalized output to data/normalized/ (critical). Nothing is
+    #    recorded yet, so a failure only needs the original out of incoming/.
+    # ----------------------------------------------------------------------
+    normalized_target = None
+    try:
+        if outcome == "partial":
+            normalized_target = paths["normalized_partial_csv"]
+        elif outcome == "success":
+            normalized_target = paths["normalized_success_csv"]
+
+        if normalized_target and os.path.exists(paths["temp_normalized_csv"]):
+            shutil.move(paths["temp_normalized_csv"], normalized_target)
+
+    except Exception as e:
+        move_to_unprocessed(context, csv_file_path)
+        log_alert_exit(
+            context,
+            92,
+            f"NORMALIZED OUTPUT MOVE ERROR: {e}\n\nTraceback:\n{traceback.format_exc()}",
+        )
+
+    # ----------------------------------------------------------------------
+    # 3. Replace the live row state (critical), then keep a copy in backups/.
+    #    On failure the output is taken out of data/normalized/ again: the
+    #    importer runs only after every bank file, so it has not seen it.
+    # ----------------------------------------------------------------------
+    if updated_row_state:
+        try:
+            copy_atomically(updated_row_state, paths["row_state_csv"])
+        except Exception as e:
+            try:
+                if normalized_target and os.path.exists(normalized_target):
+                    os.remove(normalized_target)
+            except Exception:
+                pass
+            move_to_unprocessed(context, csv_file_path)
+            log_alert_exit(
+                context,
+                93,
+                f"ROW STATE COMMIT ERROR: {e}\n\nTraceback:\n{traceback.format_exc()}",
+            )
+        try:
+            shutil.copyfile(
+                updated_row_state,
+                os.path.join(paths["row_state_backup_dir"], os.path.basename(updated_row_state)),
+            )
+        except Exception as exc:
+            context["log_event"](logfile_path, f"[ROW STATE BACKUP ERROR] {exc}")
+
+    # ----------------------------------------------------------------------
+    # 4. Archive the original (critical), last. Finished → archive/originals/
     #    <bank>/<account>/<arrival run>-<first>_<last>-<sha8>.<ext>, else →
     #    archive/unprocessed/. A copy whose content is already in that folder
     #    is dropped; in originals/ also one whose sha8 a name there carries.
     # ----------------------------------------------------------------------
     finished = outcome in FINISHED_OUTCOMES
-    archived_original = None  # where the original went; None when dropped
     try:
         sha256 = file_sha256(csv_file_path)
         if finished:
@@ -221,7 +266,6 @@ def finalize(
         else:
             # An existing file of that name in unprocessed/ is the same export: replaced
             shutil.move(csv_file_path, target)
-            archived_original = target
             context["original_archived_as"] = target
         context["log_event"](logfile_path, f"Original: {context['original_archived_as']}")
 
@@ -230,61 +274,8 @@ def finalize(
         log_alert_exit(
             context,
             94,
-            f"ORIGINAL NOT ARCHIVED: {e}\n\nTraceback:\n{traceback.format_exc()}",
-        )
-
-    # ----------------------------------------------------------------------
-    # 3. Commit duplicate-index (critical)
-    # ----------------------------------------------------------------------
-    try:
-        # Commit only when an updated duplicate-index snapshot was created.
-        if duplicate_index_rows_to_add and updated_duplicate_index:
-            if os.path.exists(paths["duplicate_index_csv"]):
-                shutil.copy2(
-                    paths["duplicate_index_csv"],
-                    paths["duplicate_index_previous_csv"],
-                )
-            else:
-                open(paths["duplicate_index_previous_csv"], "w", encoding="utf-8").close()
-
-            copy_atomically(updated_duplicate_index, paths["duplicate_index_csv"])
-
-    except Exception as e:
-        move_to_unprocessed(context, archived_original)
-
-        log_alert_exit(
-            context,
-            93,
-            f"DUPLICATE INDEX COMMIT ERROR: {e}\n\nTraceback:\n{traceback.format_exc()}",
-        )
-
-    # ----------------------------------------------------------------------
-    # 4. Move normalized output (critical)
-    # ----------------------------------------------------------------------
-    try:
-        if outcome == "partial":
-            normalized_target = paths["normalized_partial_csv"]
-        elif outcome == "success":
-            normalized_target = paths["normalized_success_csv"]
-        else:
-            normalized_target = None
-
-        if normalized_target and os.path.exists(paths["temp_normalized_csv"]):
-            shutil.move(paths["temp_normalized_csv"], normalized_target)
-
-    except Exception as e:
-        if os.path.exists(paths["duplicate_index_previous_csv"]):
-            try:
-                copy_atomically(paths["duplicate_index_previous_csv"], paths["duplicate_index_csv"])
-            except Exception:
-                pass
-
-        move_to_unprocessed(context, archived_original)
-
-        log_alert_exit(
-            context,
-            92,
-            f"NORMALIZED OUTPUT MOVE ERROR: {e}\n\nTraceback:\n{traceback.format_exc()}",
+            f"ORIGINAL NOT ARCHIVED: {e}\nIts rows are recorded; dropped in again, it is archived."
+            f"\n\nTraceback:\n{traceback.format_exc()}",
         )
 
     # ----------------------------------------------------------------------
@@ -301,11 +292,11 @@ def finalize(
             context["log_event"](logfile_path, f"[UNPROCESSED CLEANUP ERROR] {exc}")
 
     # ----------------------------------------------------------------------
-    # 6. Rotate duplicate-index backups (not critical)
+    # 6. Rotate row-state backups (not critical)
     # ----------------------------------------------------------------------
     try:
-        rotate_duplicate_backups(
-            paths["duplicate_index_backup_dir"],
+        rotate_backups(
+            paths["row_state_backup_dir"],
             context["log_event"],
             logfile_path,
         )

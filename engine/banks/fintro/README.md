@@ -8,7 +8,7 @@ entry point `normalize_row` in [normalize.py](normalize.py). All examples below 
 - CSV from Fintro online banking, **one account per file** (a file with several accounts is
   rejected as a whole).
 - UTF-8 with BOM, `;`-separated, one header row, 13 columns, newest row first.
-- Long histories come in several exports; overlapping periods are fine (duplicate index).
+- Long histories come in several exports; overlapping periods are fine (row state).
 - Originals are archived in `archive/originals/fintro/<IBAN>/` (see
   [docs/archive-and-reload.md](../../../docs/archive-and-reload.md)).
 
@@ -32,7 +32,7 @@ entry point `normalize_row` in [normalize.py](normalize.py). All examples below 
 
 ## Unique row
 
-`duplicate_key` = Volgnummer, one index per account (`partition_by: asset_account_iban`). A
+`duplicate_key` = Volgnummer, one row state per account (`partition_by: asset_account_iban`). A
 Volgnummer is unique within an account and never changes.
 
 ## Field mapping
@@ -127,16 +127,16 @@ type, and an amount in details that exactly repeats the row amount (`EUR 1.234,5
   `SEK 100,00 KOERS 1,000000 WISSELKOSTEN: 0,15 EUR` for -10,15 where `KOERS 10,000000` is meant
   (100 / 10 + 0,15 = 10,15). Bedrag and the foreign amount are right; only the printed rate is
   wrong. So the cent check also tries the rate x10 and /10. The originals are not corrected by
-  hand: a later export of the same period carries the misprint again, and the duplicate index
+  hand: a later export of the same period carries the misprint again, and the row state
   (which keeps Details) would then report the row as a conflict. `notes` keeps the rate as printed.
 - Dates are `dd/mm/yyyy`; Firefly would read them as US month/day, so the module writes ISO.
 
 ## Checking
 
-On the server (the duplicate index is in `data/`, which is not synced):
+On the server (the row state is in `data/`, which is not synced):
 
 ```bash
-# Duplicate-index status, every details step, the values found, the result or exact failure
+# Row-state status, every details step, the values found, the result or exact failure
 PYTHONPATH=. python3 -m engine.banks.fintro.debug_row <csv> <line-or-Volgnummer> [...]
 ```
 

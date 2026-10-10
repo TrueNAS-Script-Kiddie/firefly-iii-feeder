@@ -52,7 +52,7 @@ in that order. Every bank fills the same columns; empty means "not given by the 
 
 Rows are unique per (`asset_account_iban`, `external_id`) for the banks above.
 
-`row_key` is unique and stable for every bank: the account (the duplicate index's `partition_by`
+`row_key` is unique and stable for every bank: the account (the row state's `partition_by`
 value, e.g. the IBAN without spaces) and the row's duplicate key, joined by `|`
 (Fintro: `BE68539007547034|2026-00123`). A tool that must find a transaction again uses it, not
 `external_id`, which is not unique for every bank.

@@ -5,21 +5,24 @@ One POST per transaction; runs with many old rows use batch mode. Per file:
   - every row imported / already present -> file moved to data/imported/
     (as -imported-partial when the normalizer already dropped rows of the bank CSV)
   - some rows failed -> failed rows to data/failed-rows/<base>-import-failed.csv,
-    file moved to data/imported/ as -imported-partial, alert on stderr; moving that
-    failed file into data/normalized/ retries it (-> -imported-retry[-partial])
+    file moved to data/imported/ as -imported-partial, alert on stderr
   - Firefly unreachable or token refused -> run stops, file stays for the next run;
     alerted once per outage (flag file), not every cron minute
 
-Re-running a file is safe: error_if_duplicate_hash makes Firefly reject a
-transaction it already stored, which counts as "already present".
+Each row's outcome goes into the row state (data/row-state/, engine/core/row_state.py):
+the Firefly id it created or claimed, or, for a row Firefly refused, the row is dropped
+there, so the next export holding it retries it. A row whose state already has a
+Firefly id is not sent again. Re-running a file is safe anyway: error_if_duplicate_hash
+makes Firefly reject a transaction it already stored, which counts as "already present".
 
 Transfers between own asset accounts appear in both accounts' CSVs but are one
 transaction in Firefly ("match or create"): a row whose counterparty is an own
 asset account first looks for an existing transfer between the same two
 accounts, same amount, dated within TRANSFER_MATCH_DAYS. Each transfer can be
-claimed once per side (outgoing / incoming). Found -> already present;
-not found -> the row creates the transfer. Order and history coverage of the
-accounts' CSVs therefore don't matter.
+claimed once per side (outgoing / incoming), ever: the row state records which
+row used which transfer. Found -> already present; not found -> the row creates
+the transfer. Order and history coverage of the accounts' CSVs therefore don't
+matter.
 
 Usage:
   PYTHONPATH=. python3 -m engine.firefly.import_normalized [--dry-run] [--show N] [csv ...]
@@ -42,6 +45,7 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
+from engine.core.row_state import load_firefly_ids, record_import
 from engine.core.runtime import BASE_DIR, CONFIG, alert, log_event
 from engine.firefly.api import FireflyAuthError, FireflyClient, FireflyUnavailableError
 
@@ -50,6 +54,7 @@ NORMALIZED_DIR = os.path.join(DATA_DIR, "normalized")
 IMPORTED_DIR = os.path.join(DATA_DIR, "imported")
 FAILED_DIR = os.path.join(DATA_DIR, "failed-rows")
 LOG_DIR = os.path.join(DATA_DIR, "logs")
+ROW_STATE_DIR = os.path.join(DATA_DIR, "row-state")
 BLOCKED_FLAG = os.path.join(DATA_DIR, "firefly-import-blocked.flag")
 # Set while batch-submitted transactions still need rules + running balances
 RECALCULATE_FLAG = os.path.join(DATA_DIR, "firefly-recalculate.flag")
@@ -88,7 +93,7 @@ RE_DATE_OPTIONAL_TIME = re.compile(r"^\d{4}-\d{2}-\d{2}( \d{2}:\d{2})?$")
 RE_AMOUNT = re.compile(r"^-?\d+(\.\d+)?$")
 RE_DUPLICATE = re.compile(r"Duplicate of transaction #(\d+)")
 
-# (source_id, destination_id, amount) -> transfers: {"date": date, "out": claimed, "in": claimed}
+# (source_id, destination_id, amount) -> transfers: {"id": Firefly id, "date": date, "out": used, "in": used}
 TransferPool = dict[tuple[str, str, str], list[dict[str, Any]]]
 
 
@@ -157,22 +162,56 @@ def ensure_currencies(
         currencies[code] = True
 
 
-def load_transfer_pool(client: FireflyClient) -> TransferPool:
+def load_transfer_pool(client: FireflyClient, assets: Assets, firefly_ids: dict[str, str]) -> TransferPool:
+    """
+    Every Firefly transfer, with the sides the row state says are used: a row of the source
+    account whose firefly_id is the transfer used its "out" side, one of the destination account
+    its "in" side. A used side is never claimed again, in any later run.
+    """
+    used: collections.defaultdict[str, set[str]] = collections.defaultdict(set)
+    for row_key, firefly_id in firefly_ids.items():
+        if not firefly_id:
+            continue
+        try:
+            own = find_asset(assets, row_key.partition("|")[0])
+        except ValueError:
+            continue
+        if own:
+            used[firefly_id].add(own["id"])
+
     pool: TransferPool = collections.defaultdict(list)
     for group in client.get_all("transactions?type=transfer"):
+        group_id = str(group["id"])
         for split in group["attributes"]["transactions"]:
-            key = (str(split["source_id"]), str(split["destination_id"]), money(split["amount"]))
-            pool[key].append({"date": date.fromisoformat(split["date"][:10]), "out": False, "in": False})
+            source, destination = str(split["source_id"]), str(split["destination_id"])
+            pool[(source, destination, money(split["amount"]))].append(
+                {
+                    "id": group_id,
+                    "date": date.fromisoformat(split["date"][:10]),
+                    "out": source in used[group_id],
+                    "in": destination in used[group_id],
+                }
+            )
     return pool
 
 
-def claim_transfer(pool: TransferPool, key: tuple[str, str, str], on: date, side: str) -> bool:
-    """Claim the closest unclaimed transfer for this side within the match window."""
+def claim_transfer(pool: TransferPool, key: tuple[str, str, str], on: date, side: str) -> str | None:
+    """Claim the closest transfer whose side is still free within the match window: its Firefly id."""
     candidates = [t for t in pool.get(key, []) if not t[side] and abs((t["date"] - on).days) <= TRANSFER_MATCH_DAYS]
     if not candidates:
-        return False
-    min(candidates, key=lambda t: abs((t["date"] - on).days))[side] = True
-    return True
+        return None
+    transfer = min(candidates, key=lambda t: abs((t["date"] - on).days))
+    transfer[side] = True
+    return transfer["id"]
+
+
+def mark_transfer_used(pool: TransferPool, key: tuple[str, str, str], firefly_id: str, on: date, side: str) -> None:
+    """This row's side of a transfer it created (or Firefly already had) is used, in this run too."""
+    for transfer in pool.get(key, []):
+        if transfer["id"] == firefly_id:
+            transfer[side] = True
+            return
+    pool.setdefault(key, []).append({"id": firefly_id, "date": on, "out": side == "out", "in": side == "in"})
 
 
 # ---------------------------------------------------------------------------
@@ -308,14 +347,14 @@ def import_file(
     show: int,
     run_note: str,
     rows_5xx_in_a_row: collections.Counter,
+    firefly_ids: dict[str, str],
 ) -> collections.Counter:
     name = os.path.basename(path)
-    # '<base>-normalized[-partial].csv' or a retried '<base>-import-failed.csv' -> '<base>':
-    # every output keeps the normalizer's name, so all files of one bank file sort together
+    # '<base>-normalized[-partial].csv' -> '<base>': every output keeps the normalizer's name,
+    # so all files of one bank file sort together
     stem = os.path.splitext(name)[0]
-    base = re.sub(r"-(normalized(-partial)?|import-failed)$", "", stem)
+    base = re.sub(r"-normalized(-partial)?$", "", stem)
     normalized_partial = stem.endswith("-normalized-partial")
-    retry = stem.endswith("-import-failed")
     logfile = os.path.join(LOG_DIR, f"{base}-import.log")
 
     def log(message: str) -> None:
@@ -326,6 +365,8 @@ def import_file(
 
     counts: collections.Counter = collections.Counter()
     failed: list[tuple[int, dict[str, str], str]] = []
+    # row_key -> the Firefly id the row created or claimed, or None when Firefly refused it
+    outcomes: dict[str, str | None] = {}
     shown = 0
     started = time.monotonic()
 
@@ -340,23 +381,30 @@ def import_file(
         enumerate(rows, start=2), key=lambda item: (item[1].get("primary_transaction_date", ""), -item[0])
     )
     for line_no, row in numbered:
+        row_key = row.get("row_key", "")
+        # Already in Firefly: the same rows normalized twice after an interrupted run
+        if row_key and firefly_ids.get(row_key):
+            counts["already present"] += 1
+            continue
         try:
             decision, split, transfer_match = build_split(row, assets)
             ensure_currencies(split, currencies, client, dry_run, log)
         except (ValueError, KeyError, ArithmeticError) as exc:
             failed.append((line_no, row, f"line {line_no}: {exc}"))
             counts["failed"] += 1
+            outcomes[row_key] = None
             continue
 
         if transfer_match:
             key, side = transfer_match
-            on = date.fromisoformat(split["date"])
-            if claim_transfer(pool, key, on, side):
+            claimed = claim_transfer(pool, key, date.fromisoformat(split["date"]), side)
+            if claimed:
                 counts["transfer already present"] += 1
+                outcomes[row_key] = firefly_ids[row_key] = claimed
                 continue
 
         if dry_run:
-            status, response = 200, {}
+            status, response = 200, {"data": {"id": f"dry-run line {line_no}"}}
             if shown < show:
                 print(json.dumps(split, ensure_ascii=False))
                 shown += 1
@@ -385,23 +433,26 @@ def import_file(
             else:
                 rows_5xx_in_a_row["rows"] = 0
 
+        duplicate = RE_DUPLICATE.search(json.dumps(response)) if status == 422 else None
         if status == 200:
             counts[decision] += 1
-        elif status == 422 and RE_DUPLICATE.search(json.dumps(response)):
+            firefly_id = str(response.get("data", {}).get("id", ""))
+        elif duplicate:
             counts["already present"] += 1
+            firefly_id = duplicate.group(1)
         else:
             reason = f"line {line_no}: HTTP {status}: {response.get('message', '')} {response.get('errors', '')}"
             failed.append((line_no, row, reason))
             counts["failed"] += 1
+            outcomes[row_key] = None
             log(reason)
             continue
+        outcomes[row_key] = firefly_ids[row_key] = firefly_id
 
         if transfer_match:
             # The other side of this transfer must find it later, in this run or a future one
             key, side = transfer_match
-            pool.setdefault(key, []).append(
-                {"date": date.fromisoformat(split["date"]), "out": side == "out", "in": side == "in"}
-            )
+            mark_transfer_used(pool, key, firefly_id, date.fromisoformat(split["date"]), side)
 
     log(f"Result {name}: {dict(counts)} in {time.monotonic() - started:.0f} s")
     failed.sort(key=lambda item: item[0])  # back in file order
@@ -411,24 +462,28 @@ def import_file(
     if dry_run:
         return counts
 
+    # Before the file moves: should this fail, the file stays and its rows are sent again
+    missing = record_import(ROW_STATE_DIR, {key: value for key, value in outcomes.items() if key})
+    if missing:
+        log(f"Not in the row state, so not recorded ({len(missing)}): {', '.join(missing[:20])}")
+
     # -partial: not every row of the bank CSV reached Firefly (normalizer or import)
-    kind = "imported-retry" if retry else "imported"
-    target_name = f"{base}-{kind}{'-partial' if normalized_partial else ''}.csv"
+    target_name = f"{base}-imported{'-partial' if normalized_partial else ''}.csv"
     if failed:
         failed_path = os.path.join(FAILED_DIR, f"{base}-import-failed.csv")
-        # A retried file already carries import_error: replace it, don't add a second one
-        fieldnames = [field for field in rows[0] if field != "import_error"] + ["import_error"]
+        fieldnames = [*rows[0], "import_error"]
         with open(failed_path, "w", encoding="utf-8", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter=";")
             writer.writeheader()
             for _, row, reason in failed:
                 writer.writerow({**row, "import_error": reason})
-        target_name = f"{base}-{kind}-partial.csv"
+        target_name = f"{base}-imported-partial.csv"
         reasons = "\n".join(reason for _, _, reason in failed[:20])
         alert(
             f"FIREFLY IMPORT PARTIAL: {name} ({counts['failed']} of {len(rows)} rows failed)",
             f"File: {name}\nFailed rows: {failed_path}\nLog: {logfile}\n{dict(counts)}\n\n{reasons}\n\n"
-            f"Retry after fixing the cause: move {failed_path} to {NORMALIZED_DIR}/",
+            "These rows are out of the row state again. After fixing the cause, the next export holding "
+            "them retries them, or copy the original from archive/originals/ into data/incoming/.",
         )
     shutil.move(path, os.path.join(IMPORTED_DIR, target_name))
     return counts
@@ -559,7 +614,8 @@ def import_all(args: argparse.Namespace) -> int:
             started = time.monotonic()
             assets = load_asset_accounts(client)
             currencies = load_currencies(client)
-            pool = load_transfer_pool(client)
+            firefly_ids = load_firefly_ids(ROW_STATE_DIR)
+            pool = load_transfer_pool(client, assets, firefly_ids)
             cutoff = (date.today() - timedelta(days=BATCH_OLD_ROW_AGE_DAYS)).isoformat()
             old_rows = sum(count_old_rows(path, cutoff) for path in files)
             batch = old_rows > BATCH_OLD_ROWS_THRESHOLD
@@ -581,7 +637,17 @@ def import_all(args: argparse.Namespace) -> int:
                 if args.dry_run:
                     print(f"== {os.path.basename(path)}")
                 counts = import_file(
-                    path, client, assets, currencies, pool, batch, args.dry_run, args.show, run_note, rows_5xx_in_a_row
+                    path,
+                    client,
+                    assets,
+                    currencies,
+                    pool,
+                    batch,
+                    args.dry_run,
+                    args.show,
+                    run_note,
+                    rows_5xx_in_a_row,
+                    firefly_ids,
                 )
                 if args.dry_run:
                     print(f"  {dict(counts)}")

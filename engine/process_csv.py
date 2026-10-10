@@ -23,7 +23,7 @@ from engine.core.csv_validation import (
     extract_duplicate_key,
     validate_and_prepare,
 )
-from engine.core.duplicate_index import classify_duplicate, load_duplicate_index
+from engine.core.row_state import FIREFLY_ID, classify_duplicate, load_row_state, state_filename
 from engine.core.runtime import log_event
 
 NORMALIZED_FIELDNAMES = [
@@ -112,8 +112,8 @@ def main() -> None:
         for d in (
             paths["failed_dir"],
             paths["normalized_dir"],
-            paths["duplicate_index_dir"],
-            paths["duplicate_index_backup_dir"],
+            paths["row_state_dir"],
+            paths["row_state_backup_dir"],
             paths["temp_dir"],
         ):
             os.makedirs(d, exist_ok=True)
@@ -196,9 +196,9 @@ def main() -> None:
             return
 
         # -----------------------------------------------------------------
-        # Set account-specific duplicate-index path
-        # partition_by column value (e.g. asset_account_iban) determines
-        # which index file is used, so one index per account
+        # Set the account's row-state path
+        # partition_by column value (e.g. asset_account_iban) names the
+        # account, so one row-state file per account
         # -----------------------------------------------------------------
         if partition_by:
             partition_value = valid_rows[0].get(partition_by, "").replace(" ", "").upper() if valid_rows else ""
@@ -210,11 +210,11 @@ def main() -> None:
                     message=(
                         f"CSV ALL ROWS FILTERED, account unknown: no row has a valid '{partition_by}'"
                         if all_filtered
-                        else f"DUPLICATE INDEX: partition_by column '{partition_by}' is empty in first valid row"
+                        else f"ROW STATE: partition_by column '{partition_by}' is empty in first valid row"
                     ),
                 )
                 return
-            # One index per account: a file mixing accounts would be checked against the wrong one
+            # One state per account: a file mixing accounts would be checked against the wrong one
             partition_values = sorted({r.get(partition_by, "").replace(" ", "").upper() for r in valid_rows})
             if len(partition_values) > 1:
                 completion.finalize(
@@ -227,11 +227,10 @@ def main() -> None:
                     ),
                 )
                 return
-            index_filename = f"{partition_value}-duplicate-index.csv"
         else:
             partition_value = ""
-            index_filename = f"{bank_cfg['bank']}-duplicate-index.csv"
-        paths["duplicate_index_csv"] = os.path.join(paths["duplicate_index_dir"], index_filename)
+        # Named like the first part of row_key: the account, or the bank without partition_by
+        paths["row_state_csv"] = os.path.join(paths["row_state_dir"], state_filename(partition_value or bank_name))
 
         # -----------------------------------------------------------------
         # Name every output after its content: bank, account, period
@@ -259,12 +258,12 @@ def main() -> None:
             return
 
         # -----------------------------------------------------------------
-        # Load duplicate index
+        # Load row state
         # -----------------------------------------------------------------
-        duplicate_index = load_duplicate_index(paths["duplicate_index_csv"])
+        row_state = load_row_state(paths["row_state_csv"])
         log_event(
             logfile_path,
-            f"Loaded duplicate index with {sum(len(v) for v in duplicate_index.values())} rows",
+            f"Loaded row state with {sum(len(v) for v in row_state.values())} rows",
         )
 
         # -----------------------------------------------------------------
@@ -273,12 +272,12 @@ def main() -> None:
         failed_any = False
         normalized_any = False
 
-        # Rows that must be added to the duplicate-index
-        duplicate_index_rows_to_add: list[dict[str, Any]] = []
-        context["duplicate_index_rows_to_add"] = duplicate_index_rows_to_add
+        # Rows that must be added to the row state
+        row_state_rows_to_add: list[dict[str, Any]] = []
+        context["row_state_rows_to_add"] = row_state_rows_to_add
 
-        # Required fields for duplicate-index rows
-        duplicate_index_required_fields = list(bank_cfg["columns"]["required"].keys())
+        # Required fields for row-state rows
+        row_state_required_fields = list(bank_cfg["columns"]["required"].keys())
 
         # -----------------------------------------------------------------
         # Initialize writers
@@ -298,11 +297,11 @@ def main() -> None:
         # -----------------------------------------------------------------
         for row in validated_rows:
             original_csv_row = row.get("_original_csv_row", row)
-            # Same shape as the duplicate index, for side-by-side comparison; the
+            # Same shape as the row state, for side-by-side comparison; the
             # original row is only needed by the normalize-failed output
             duplicate_failed_row = {k: v for k, v in row.items() if k != "_original_csv_row"}
 
-            # Row with a cell that failed regex validation: no dedup, no index
+            # Row with a cell that failed regex validation: no dedup, not in the row state
             if "_validation_error" in row:
                 failed_any = True
                 write_failed_row(paths["failed_normalize_csv"], normalize_failed_ref, original_csv_row)
@@ -321,7 +320,7 @@ def main() -> None:
                 continue
 
             # Duplicate check
-            status = classify_duplicate(duplicate_index, key, row, bank_cfg)
+            status = classify_duplicate(row_state, key, row, bank_cfg)
 
             if status == "identical":
                 log_event(logfile_path, f"IGNORED identical row with key {key}")
@@ -350,17 +349,17 @@ def main() -> None:
                 )
                 continue
 
-            # Only successfully normalized rows enter the duplicate index, so a
-            # failed row is retried when its CSV is processed again
-            duplicate_index_row = {"duplicate_key": key}
-            for field in duplicate_index_required_fields:
-                duplicate_index_row[field] = row.get(field, "")
-            duplicate_index_rows_to_add.append(duplicate_index_row)
+            # Only successfully normalized rows enter the row state, so a
+            # failed row is retried when its CSV is processed again. The importer fills firefly_id.
+            row_state_row = {"duplicate_key": key, FIREFLY_ID: ""}
+            for field in row_state_required_fields:
+                row_state_row[field] = row.get(field, "")
+            row_state_rows_to_add.append(row_state_row)
 
-            # Update in-memory duplicate index so later rows see this one
-            duplicate_index.setdefault(key, []).append(duplicate_index_row)
+            # Update in-memory row state so later rows see this one
+            row_state.setdefault(key, []).append(row_state_row)
 
-            # Unique within the duplicate index's scope: one account, or the bank without partition_by
+            # Unique within the row state's scope: one account, or the bank without partition_by
             normalized_row["row_key"] = f"{partition_value or bank_name}|{key}"
 
             # Valid normalized row

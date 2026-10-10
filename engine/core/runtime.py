@@ -3,7 +3,7 @@ Generic runtime utilities used across the CSV pipeline.
 
 This module contains only small, infrastructure-level helpers that:
 - do NOT belong to CSV logic
-- do NOT belong to duplicate-index logic
+- do NOT belong to row-state logic
 - do NOT belong to normalization logic
 - do NOT belong to completion logic
 

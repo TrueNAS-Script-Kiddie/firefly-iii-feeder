@@ -40,7 +40,7 @@ archive/
    archived, copy dropped" in the log) when its target folder already holds the same content, or,
    in `originals/`, a name ending in its `-<sha8>.<ext>`: the same export, corrected by hand since.
    Once a file is finished, copies with its content are removed from `unprocessed/`.
-5. **Overlapping exports are fine.** Each is archived; the duplicate index deduplicates their rows
+5. **Overlapping exports are fine.** Each is archived; the row state deduplicates their rows
    at every load.
 6. **`data/` is disposable.** It holds no original; rows that failed are in `data/failed-rows/`.
 7. **Git after every run with work.** After the importer, still under the lock,
@@ -72,7 +72,7 @@ flowchart LR
     end
     subgraph DISP["data/ — disposable, can be remade"]
         IN[incoming/] --> NO[normalized/] --> IM[imported/]
-        IX[duplicate-index/]
+        IX[row-state/]
         FR[failed-rows/]
         LO[logs/]
     end
@@ -104,16 +104,16 @@ flowchart TD
     R[row] --> FI{filter<br/>e.g. status not Geaccepteerd}
     FI -->|filtered out| G[counted in the log, nothing else]
     FI --> V{cells valid?}
-    V -->|no| NF1["failed-rows/…-normalize-failed.csv<br/>not in the index"]
-    V -->|yes| K{duplicate key<br/>in the account's index?}
+    V -->|no| NF1["failed-rows/…-normalize-failed.csv<br/>not in the row state"]
+    V -->|yes| K{duplicate key<br/>in the account's row state?}
     K -->|no: new| N{normalize_row succeeds?}
     K -->|yes, all fields equal| ID[identical: skipped]
     K -->|yes, fields differ| CO["conflict: failed-rows/…-duplicate-failed.csv<br/>+ alert; Firefly keeps the first version"]
-    N -->|yes| OK["normalized/ + index"]
-    N -->|no| NF2["failed-rows/…-normalize-failed.csv<br/>not in the index"]
+    N -->|yes| OK["normalized/ + row state"]
+    N -->|no| NF2["failed-rows/…-normalize-failed.csv<br/>not in the row state"]
 ```
 
-A row enters the index only once it is normalized, so a row that failed is retried as soon as the
+A row enters the row state only once it is normalized, so a row that failed is retried as soon as the
 same export arrives again.
 
 ### One row in the importer
@@ -127,7 +127,7 @@ flowchart TD
     T -->|no| P[POST to Firefly]
     P -->|200| NEW[new transaction]
     P -->|422 duplicate hash| AP[already present: nothing new]
-    P -->|other error| IF["failed-rows/…-import-failed.csv<br/>already in the index"]
+    P -->|other error| IF["failed-rows/…-import-failed.csv<br/>removed from the row state"]
 ```
 
 ### Overlapping exports
@@ -137,7 +137,7 @@ Three exports of one account, requested and dropped in this order:
 ```mermaid
 sequenceDiagram
     participant B as incoming/
-    participant N as normalizer + index
+    participant N as normalizer + row state
     participant A as archive
     participant F as Firefly
     B->>N: A: 2015–2024 (1000 rows)
@@ -162,14 +162,14 @@ Firefly: 1250 transactions; the archive: A, B and C.
 ```mermaid
 flowchart TD
     subgraph NORM["row failed in the normalizer"]
-        A1["failed-rows/…-normalize-failed.csv<br/>not in the index"] --> A2[fix the parser]
+        A1["failed-rows/…-normalize-failed.csv<br/>not in the row state"] --> A2[fix the parser]
         A2 --> A3["copy the original from archive/originals/<br/>to incoming/"]
         A3 --> A4[rest identical, this row new → Firefly;<br/>the copy is dropped]
     end
     subgraph IMP["Firefly refused the row"]
-        B1["failed-rows/…-import-failed.csv<br/>already in the index"] --> B2[fix the cause]
-        B2 --> B3["move that file to normalized/"]
-        B3 --> B4[sent again → Firefly]
+        B1["failed-rows/…-import-failed.csv<br/>removed from the row state"] --> B2[fix the cause]
+        B2 --> B3["the next export holding the row,<br/>or the original copied from archive/originals/<br/>to incoming/"]
+        B3 --> B4[rest identical, this row new → Firefly;<br/>the copy is dropped]
     end
     subgraph UNP["file rejected"]
         C1["archive/unprocessed/…"] --> C2[fix config or parser]

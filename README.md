@@ -2,7 +2,7 @@
 
 Automated pipeline for ingesting bank-exported CSVs, validating them,
 normalizing transactions into a unified model, deduplicating against a
-persistent per-account index, and importing the result into Firefly III.
+persistent per-account row state, and importing the result into Firefly III.
 Designed for unattended cron execution on TrueNAS or any Linux host.
 
 ## Overview
@@ -10,7 +10,7 @@ Designed for unattended cron execution on TrueNAS or any Linux host.
 - Detects incoming CSVs in `data/incoming/`
 - Auto-detects the bank by matching CSV headers against YAML configs
 - Validates, filters and normalizes each row
-- Deduplicates via a per-account persistent index
+- Deduplicates via a per-account row state, which also records each row's Firefly transaction
 - Emits normalized output to `data/normalized/`
 - Imports `data/normalized/` into Firefly III via its REST API, then moves
   each file to `data/imported/`
@@ -36,7 +36,7 @@ firefly-iii-feeder/
 ├── engine/
 │   ├── process_csv.py             # Normalizer entry point
 │   ├── core/                      # csv_runtime, csv_validation,
-│   │                              # duplicate_index, completion, runtime
+│   │                              # row_state, completion, runtime
 │   ├── banks/
 │   │   └── fintro/                # Per-bank package: README (export, parsing),
 │   │                              # normalize, extract_details, parsers, reconcile
@@ -55,7 +55,7 @@ firefly-iii-feeder/
 ├── bank-csv-originals/            # Exports from before the archive
 ├── data/                          # Disposable: remade by a reload
 │   ├── incoming/ normalized/ imported/ failed-rows/
-│   ├── duplicate-index/           # Per-account index + rotated backups
+│   ├── row-state/                 # Per account: known rows, their Firefly id; backups
 │   ├── logs/ temp/
 ├── ruff.toml
 └── .vscode/sftp.json              # Optional auto-sync to remote host (local, gitignored)
@@ -78,13 +78,13 @@ firefly-iii-feeder/
 3. The Python engine loads the CSV, auto-detects the bank, validates and
    maps columns, names every output after bank, account and period of the
    transactions (`<run>-<bank>-<account>-<first>_<last>-<stage>`), loads the
-   account-specific duplicate index, and processes each row: dedup →
+   account's row state, and processes each row: dedup →
    normalize → write temp output.
 4. A single exit path (`completion.finalize`) archives the original
    (`archive/originals/` when finished, else `archive/unprocessed/`; a copy
-   already archived is dropped), commits the updated duplicate index, moves the
-   normalized output, rotates
-   backups, cleans the temp dir, logs, alerts on failure, and exits with an
+   already archived is dropped) as its last step, after moving the normalized
+   output and replacing the row state; it rotates backups, cleans the temp dir,
+   logs, alerts on failure, and exits with an
    outcome code (`0`, `65`, `75`, `92`/`93`/`94`/`97`, `99`; see `AGENTS.md` →
    "Exit Codes").
 5. After all incoming files, still under the lock, the importer
@@ -125,7 +125,7 @@ Direct (for debugging):
 ```bash
 PYTHONPATH=. python3 -m engine.process_csv <csv_path> <YYYYMMDD-HHMMSS-NNN> <logfile_path>
 PYTHONPATH=. python3 -m engine.firefly.import_normalized --dry-run --show 3
-# Why a row fails or is skipped: duplicate-index status, every parser step, the exact error
+# Why a row fails or is skipped: row-state status, every parser step, the exact error
 PYTHONPATH=. python3 -m engine.banks.fintro.debug_row <csv> <line-or-Volgnummer>
 ```
 
