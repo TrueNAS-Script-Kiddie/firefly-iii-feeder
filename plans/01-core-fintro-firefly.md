@@ -120,6 +120,11 @@ plans/NN-*.md                      temporary (below)
 4. **Plans are temporary**: after execution the lasting facts go to the files above and the plan
    disappears (git keeps it). AGENTS.md says so in one line.
 
+> Steps 1–3 describe the code as it was when they were carried out. The archive work changed
+> part of it since: `data/failed/` and `data/processed/` no longer exist; originals go to
+> `archive/originals/` or `archive/unprocessed/<run>-<name>` (no `-crashed-` / `-move-failed-`
+> names), failed rows to `data/failed-rows/` ([docs/archive-and-reload.md](../docs/archive-and-reload.md)).
+
 ### Step 1 — File names in `data/` ✅ `5a01be5`
 
 Before: `<ts>-<original name>-<stage>`. Two problems (checked in the code and on the server):
