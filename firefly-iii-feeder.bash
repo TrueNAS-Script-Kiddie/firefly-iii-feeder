@@ -62,11 +62,18 @@ run_log() {
 }
 
 # Original Python left in incoming/ → archive/unprocessed/ as "<run>-<name>", or under its own
-# name when that starts with a run id; a file of that name there is the same export: replaced
+# name when that starts with a run id; a file of that name there is the same export: replaced.
+# Content already there under any name: the copy is dropped, so every export is archived once.
 archive_unprocessed() {
-	local name="${FILENAME}"
-	[[ "${name}" =~ ${ARRIVAL_RUN_ID} ]] || name="${RUN_ID}-${name}"
+	local name="${FILENAME}" archived
 	[[ -f "${FILE_PATH}" ]] || return 0
+	for archived in "${UNPROCESSED_DIR}"/*; do
+		if cmp -s "${FILE_PATH}" "${archived}"; then
+			rm -f "${FILE_PATH}" && run_log "Original: ${archived} (already archived, copy dropped)"
+			return 0
+		fi
+	done
+	[[ "${name}" =~ ${ARRIVAL_RUN_ID} ]] || name="${RUN_ID}-${name}"
 	mv -f "${FILE_PATH}" "${UNPROCESSED_DIR}/${name}" && run_log "Original: ${UNPROCESSED_DIR}/${name}"
 }
 

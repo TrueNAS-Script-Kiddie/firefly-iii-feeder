@@ -81,11 +81,17 @@ def archived_copies(folder: str, sha256: str, name_suffix: str | None = None) ->
 def move_to_unprocessed(context: dict[str, Any], path: str | None) -> None:
     """
     Compensating move after a critical failure: the original's rows were not recorded, so it
-    must be dropped in again. Nothing to move when it was dropped as already archived.
+    must be dropped in again. Nothing to move when it was dropped as already archived; a copy
+    whose content unprocessed/ already holds is dropped too.
     """
     target = context["paths"]["archive_unprocessed"]
     try:
         if path and os.path.exists(path):
+            existing = archived_copies(context["paths"]["archive_unprocessed_dir"], file_sha256(path))
+            if existing:
+                os.remove(path)
+                context["original_archived_as"] = f"{existing[0]} (already archived, copy dropped)"
+                return
             os.makedirs(os.path.dirname(target), exist_ok=True)
             shutil.move(path, target)
             context["original_archived_as"] = target
