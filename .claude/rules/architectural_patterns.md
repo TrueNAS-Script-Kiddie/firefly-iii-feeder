@@ -246,7 +246,10 @@ one `POST /api/v1/transactions`.
 - **Run-level vs row-level failure** — `FireflyAuthError` /
   `FireflyUnavailableError` ([engine/firefly/api.py](../../engine/firefly/api.py))
   stop the run and leave files in place, alerted once per outage via
-  `data/firefly-import-blocked.flag`; any other rejection fails only that row
+  `data/firefly-import-blocked.flag`. A 5xx on a POST is first checked with
+  `GET about` (`firefly_answers`): if Firefly answers, the row is the problem and
+  fails like any other rejection, so it cannot block every run. Any other
+  rejection fails only that row
   (to `data/failed-rows/<base>-import-failed.csv`) and the file moves to
   `data/imported/` as `<base>-imported-partial.csv`. A file the normalizer
   already marked `-normalized-partial` also ends up `-imported-partial`. Retry:

@@ -304,7 +304,7 @@ after both plans; it also gives existing transactions the changes of plan 01.
    balance = last `Nieuw saldo`; both Rabobank accounts end on 0; every own transfer appears
    exactly once; nothing left in `archive/unprocessed/`.
 
-Takes about an hour (~14,500 Fintro rows in batch + ~750 Argenta rows).
+Takes about an hour (~14,000 Fintro rows in batch + ~750 Argenta rows).
 
 ## 5. Testing
 

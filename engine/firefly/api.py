@@ -3,7 +3,8 @@ Minimal Firefly III REST API client (stdlib only).
 
 Raises FireflyAuthError on 401/403 and FireflyUnavailableError when the
 server cannot be reached or answers 5xx, so callers can stop the whole run
-instead of failing row by row.
+instead of failing row by row (the 5xx is in its status, for callers that check
+whether only one request is the problem).
 """
 
 import json
@@ -19,7 +20,10 @@ class FireflyAuthError(Exception):
 
 
 class FireflyUnavailableError(Exception):
-    pass
+    def __init__(self, message: str, status: int | None = None) -> None:
+        super().__init__(message)
+        # The 5xx Firefly answered; None when it was not reached or the answer was not the API
+        self.status = status
 
 
 class FireflyClient:
@@ -55,7 +59,7 @@ class FireflyClient:
         if status in (401, 403):
             raise FireflyAuthError(f"{method} {path}: HTTP {status} (token refused or expired)")
         if status >= 500:
-            raise FireflyUnavailableError(f"{method} {path}: HTTP {status}")
+            raise FireflyUnavailableError(f"{method} {path}: HTTP {status}", status)
         try:
             return status, json.loads(raw) if raw else {}
         except json.JSONDecodeError:

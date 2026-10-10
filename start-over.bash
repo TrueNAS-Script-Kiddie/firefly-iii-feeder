@@ -146,5 +146,5 @@ cp -- "${ORIGINALS[@]}" "${DATA_DIR}/incoming/" || stop "could not copy archive/
 waiting=("${DATA_DIR}"/incoming/*)
 cat <<EOF
 Done: ${#waiting[@]} files in data/incoming/. The cron job loads them from the next minute on
-(about an hour for 15,000 rows); alerts come by mail. The previous data/ is in data-before-start-over/.
+(about an hour for the full history); alerts come by mail. The previous data/ is in data-before-start-over/.
 EOF

@@ -39,11 +39,9 @@ def build_paths(data_dir: str, archive_dir: str, run_id: str, source_filename: s
     stem = os.path.splitext(source_filename)[0]
     unprocessed_name = source_filename if ARRIVAL_RUN_ID.match(source_filename) else f"{run_id}-{source_filename}"
 
-    # ruff: noqa: E501
     # fmt: off
     paths = {
         # Directories
-        "incoming_dir": os.path.join(data_dir, "incoming"),
         "failed_dir": os.path.join(data_dir, "failed-rows"),
         "normalized_dir": os.path.join(data_dir, "normalized"),
         "temp_dir": os.path.join(data_dir, "temp"),
@@ -64,7 +62,6 @@ def build_paths(data_dir: str, archive_dir: str, run_id: str, source_filename: s
         "archive_original_stem": "",
     }
     # fmt: on
-    # ruff: enable=E501
     paths.update(output_paths(data_dir, f"{run_id}-unknown-{stem}"))
     return paths
 

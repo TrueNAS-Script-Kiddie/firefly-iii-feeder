@@ -32,7 +32,7 @@ What other tools may rely on in the output: [docs/output-contract.md](docs/outpu
 ```
 firefly-iii-feeder/
 ├── firefly-iii-feeder.bash       # Cron entry (flock, upload check, archive commit)
-├── start-over.bash                # Wipe the feeder's part of Firefly, reload the archive
+├── start-over.bash                # Wipe Firefly's transactions, reload the archive
 ├── engine/
 │   ├── process_csv.py             # Normalizer entry point
 │   ├── core/                      # csv_runtime, csv_validation,
@@ -58,7 +58,7 @@ firefly-iii-feeder/
 │   ├── duplicate-index/           # Per-account index + rotated backups
 │   ├── logs/ temp/
 ├── ruff.toml
-└── .vscode/sftp.json              # Optional auto-sync to remote host
+└── .vscode/sftp.json              # Optional auto-sync to remote host (local, gitignored)
 ```
 
 ## How It Works
@@ -160,9 +160,9 @@ selects `E,F,W,I,UP,B`).
 
 ## VS Code SFTP Sync
 
-`.vscode/sftp.json` uploads every saved file to the deployment host, so an
-edit is live on the next cron minute. Update `host`, `username`,
-`privateKeyPath`, and `remotePath` to match your environment. Its `ignore`
+`.vscode/sftp.json` (local, gitignored: create your own) uploads every saved file to the
+deployment host, so an edit is live on the next cron minute. Set `host`, `username`,
+`privateKeyPath`, and `remotePath` for your environment. Its `ignore`
 list keeps dev files, caches and `config/app.env` off the server, and `data/`,
 `archive/`, `data-before-start-over/` and `bank-csv-originals/` out of sync: they
 are server state, and the watcher's auto-delete would mirror a local delete there.

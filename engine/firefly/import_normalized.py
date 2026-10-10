@@ -285,6 +285,15 @@ def build_split(
 # ---------------------------------------------------------------------------
 # One file
 # ---------------------------------------------------------------------------
+def firefly_answers(client: FireflyClient) -> bool:
+    """True when Firefly answers a plain request: it is up."""
+    try:
+        status, _ = client.request("GET", "about")
+    except (FireflyAuthError, FireflyUnavailableError):
+        return False
+    return status == 200
+
+
 def import_file(
     path: str,
     client: FireflyClient,
@@ -355,7 +364,14 @@ def import_file(
                 "fire_webhooks": True,
                 "transactions": [split],
             }
-            status, response = client.request("POST", "transactions", body)
+            try:
+                status, response = client.request("POST", "transactions", body)
+            except FireflyUnavailableError as exc:
+                # A 5xx while Firefly answers other requests is this row's fault: failing only the row
+                # keeps one row Firefly always crashes on from blocking every run
+                if exc.status is None or not firefly_answers(client):
+                    raise FireflyUnavailableError(f"{name} line {line_no}: {exc}") from exc
+                status, response = exc.status, {"message": "Firefly crashed on this row; it answers other requests"}
 
         if status == 200:
             counts[decision] += 1
@@ -555,7 +571,9 @@ def import_all(args: argparse.Namespace) -> int:
                     print(f"  {dict(counts)}")
                 totals.update(counts)
         if not args.dry_run and os.path.exists(RECALCULATE_FLAG):
-            follow_up_log = os.path.join(LOG_DIR, f"{datetime.now():%Y%m%d-%H%M%S}-firefly-follow-up.log")
+            # Named after the batch that set the flag: retries every minute append, not one log each
+            pending_since = datetime.fromtimestamp(os.path.getmtime(RECALCULATE_FLAG))
+            follow_up_log = os.path.join(LOG_DIR, f"{pending_since:%Y%m%d-%H%M%S}-firefly-follow-up.log")
             started = time.monotonic()
             finished = finish_batch(client)
             recalculated = False

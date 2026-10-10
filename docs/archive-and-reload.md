@@ -1,7 +1,7 @@
 # Archive and starting over
 
 Every export dropped in `data/incoming/` is kept in a private git repo on the server, and
-`start-over.bash` wipes the feeder's transactions in Firefly and loads that archive again (AGENTS.md,
+`start-over.bash` wipes the transactions in Firefly and loads that archive again (AGENTS.md,
 hard rule "Rebuild from scratch"). Examples are made up.
 
 ## The archive
@@ -246,8 +246,7 @@ sequenceDiagram
    and run it again.
 
 Files waiting in `normalized/` are dropped: their originals are in the archive. A rejected file
-that still fails alerts again and stays in `unprocessed/`. The cron job then needs about an hour
-for ~14,500 rows (batch mode plus the follow-up).
+that still fails alerts again and stays in `unprocessed/`. How long the reload takes: AGENTS.md "Start Over".
 
 **Not restored** by a start-over:
 - `config/app.env` (URL, token) and the one-time setup: Firefly's configuration, the root helper
@@ -255,6 +254,8 @@ for ~14,500 rows (batch mode plus the follow-up).
 - Own (asset) accounts: they are not wiped, and not in the archive either; the importer needs them
   with their IBANs. A new Firefly needs them created by hand first.
 - Classification: rules, categories and tags stay in Firefly but no longer hold any transaction.
+- Anything entered by hand in Firefly: every transaction and every expense/revenue account is
+  wiped, not only what the feeder created.
 - A column the bank only recently added: older originals lack it, until a fresh history export.
 - The previous `data/` (logs, failed rows) stays in `data-before-start-over/` until the next one.
 
