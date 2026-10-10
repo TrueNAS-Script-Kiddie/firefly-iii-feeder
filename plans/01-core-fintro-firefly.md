@@ -1,7 +1,7 @@
 # Plan 01 — Core, Fintro and Firefly setup
 
-Status: **in progress — steps 0 to 3 done; next: [plan 00](00-archive-and-reload.md), then
-step 4.** To be carried out before [plan 02 (Argenta)](02-argenta.md).
+Status: **in progress — steps 0 to 3 done; next: step 4.** To be carried out before
+[plan 02 (Argenta)](02-argenta.md).
 Nothing here is Argenta-specific, but plan 02 builds on it. Examples are made up (public
 repo); real rows stay in the terminal.
 
@@ -25,8 +25,8 @@ below only runs when there is work; after step 1 the idle measurement is repeate
    importer enables a disabled currency (step 3).
 5. ✅ **Own accounts via a file** that the feeder applies to Firefly (step 5), using plain words
    for the kind of account.
-6. ✅ **That file is `archive/accounts.yaml`** in the archive repo on the server (plan 00),
-   edited through the share and committed by the feeder (step 5).
+6. ✅ **That file is `archive/accounts.yaml`** in the archive repo on the server
+   ([docs/archive-and-reload.md](../docs/archive-and-reload.md)), edited through the share and committed by the feeder (step 5).
 7. ✅ **Whatever must be done by hand is one checklist** in AGENTS.md (step 6).
 8. ✅ **Rabobank.be** (bank code 844, confirmed by a letter from the bank), closed, no more
    exports. The Fintro and Argenta exports show three Rabobank IBANs (numbers, amounts and
@@ -54,7 +54,7 @@ below only runs when there is work; after step 1 the idle measurement is repeate
    architectural_patterns.md (loaded every session); per bank → `engine/banks/<bank>/README.md`
    (loaded only when someone works on that bank); what other tools may rely on →
    `docs/output-contract.md`. Personal matters live in private repos: the own accounts in the
-   archive repo (plan 00), classification and reporting in the finance repo, which links to this
+   archive repo, classification and reporting in the finance repo, which links to this
    contract; the docs mention the latter only as "a private tool".
 10. ✅ **Unique row key in Firefly**: `internal_reference` = `<account>|<duplicate key>`
     (step 3). `external_id` is the bank's reference and is not always unique (Argenta) or does
@@ -75,7 +75,7 @@ finance tool (private repo); what is one-off per server or impossible via the AP
 | Enabling currencies that occur in transactions | **feeder**, at import (step 3) | needed for `foreign_amount` |
 | Counterparties (expense/revenue accounts) | Firefly creates them itself on import | merging name variants: finance tool |
 | Categories, tags, rules, rule groups, budgets, recurring transactions, piggy banks | finance tool | classification, personal |
-| Firefly version, `enable_batch_processing`, Personal Access Token, default currency EUR, root helper + sudo rule, cron job, archive repo (plan 00 step 2) | **by hand**, once per server, as a checklist (step 6) | the API stores the batch setting as text (Firefly ignores it); without a token there is no API; the sudo rule, cron and git setup are TrueNAS, not Firefly |
+| Firefly version, `enable_batch_processing`, Personal Access Token, default currency EUR, root helper + sudo rule, cron job, archive repo (docs/archive-and-reload.md "Setup") | **by hand**, once per server, as a checklist (step 6) | the API stores the batch setting as text (Firefly ignores it); without a token there is no API; the sudo rule, cron and git setup are TrueNAS, not Firefly |
 | Language, date format, start page | your preference, not maintained | the feeder does not need them |
 
 ## 3. Steps (order = commits)
@@ -266,7 +266,7 @@ enabled as soon as a row with that currency is really imported (at the latest at
 
 1. `engine/regression.py`: identify rows by (account, **duplicate key**) instead of
    `(IBAN, external_id)`, because not every bank has a unique `external_id` (plan 02); glob
-   recursively (`**`), so one command covers `archive/originals/` (plan 00), all banks and
+   recursively (`**`), so one command covers `archive/originals/`, all banks and
    accounts.
 2. Generic `engine/debug_row.py`: columns, duplicate status, result or exact error; a bank may
    add its own step-by-step trace. Fintro's details trace stays.
@@ -286,7 +286,7 @@ the feeder makes Firefly match it.
 - The file is the truth: a GUI change to such an account is overwritten.
 - Personal data → **not in this public repo**. The repo gets a template
   `config/accounts.example.yaml` with all explanation and made-up accounts (English, like the
-  rest of the repo); your own file is `archive/accounts.yaml` (plan 00), a fixed path, and starts
+  rest of the repo); your own file is `archive/accounts.yaml`, a fixed path, and starts
   as a copy of it.
 - To check during execution: does Firefly refuse an own account with an IBAN that already exists
   as an expense/revenue account (today so for the Argenta and Rabobank IBANs)? Then the order at
@@ -376,7 +376,7 @@ source code, so those names were not checked.
 "Debit" is not a kind of account but a card attached to a current account; in Firefly that card
 has no account of its own.
 
-**Where the file lives.** `archive/accounts.yaml`, in the archive repo on the server (plan 00):
+**Where the file lives.** `archive/accounts.yaml`, in the archive repo on the server:
 you edit it through the share, the feeder applies it and commits and pushes it with the rest of
 the archive. It lives where it is used, so nothing is copied from the desktop.
 
@@ -398,7 +398,8 @@ output-contract):
      so by hand).
   5. Install the root helper + sudo rule for the cron user.
   6. Cron job in TrueNAS (every minute, lock guard, "Hide Standard Error" off).
-  7. Archive repo: Forgejo repo, deploy key, `git init` in `archive/` (plan 00 step 2).
+  7. Archive repo: Forgejo repo, deploy key, `git init` in `archive/` (now in
+     docs/archive-and-reload.md "Setup"; move it here and link to it from there).
 - repeat the idle measurement and update the number if it changes.
 
 ## 4. Testing

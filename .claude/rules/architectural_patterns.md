@@ -29,7 +29,7 @@ ordered sequence. Each phase must succeed before the next begins:
    `normalize_row` → write temp output.
 7. **Outcome classification** — `success` / `partial` / `all_failed` /
    `all_full_duplicates` / `all_filtered` / `structure_failed` / `error`.
-8. **Finalize** — single exit path for all file moves, index commit, alert
+8. **Finalize** — single exit path for archiving the original, index commit, file moves, alert
    (`finalize` in [engine/core/completion.py](../../engine/core/completion.py)).
 
 ## 2. Single Exit Path (`completion.finalize`)
@@ -37,9 +37,12 @@ ordered sequence. Each phase must succeed before the next begins:
 `finalize()` is the **only** place that calls `sys.exit()` (apart from the
 argument check at the top of `main()`). Every code path
 (normal, error, structure failure, row-level failure) calls it, guaranteeing
-that file moves, index commits, writer cleanup, backup rotation, temp cleanup,
-and the failure alert always happen together. Outcomes map 1:1 to exit codes and
-destination subdirectories — see the step-numbered blocks inside `finalize`.
+that archiving the original, index commits, file moves, writer cleanup, backup
+rotation, temp cleanup, and the failure alert always happen together. Outcomes map
+1:1 to exit codes and destinations: a finished outcome archives the original in
+`archive/originals/`, any other in `archive/unprocessed/`
+([docs/archive-and-reload.md](../../docs/archive-and-reload.md)). See the
+step-numbered blocks inside `finalize`.
 
 ## 3. Configuration-Driven Bank Support
 
@@ -136,16 +139,18 @@ normalized-output move fails — see step 4 of `finalize`.
 The step-numbered blocks inside `finalize()` in
 [engine/core/completion.py](../../engine/core/completion.py) distinguish:
 
-- **Non-critical** (wrap in try/except, log, continue): backup rotation,
-  temp cleanup, logging itself.
-- **Critical** (attempt compensating move, alert, exit): original CSV move
+- **Non-critical** (wrap in try/except, log, continue): removing a finished
+  original's copies from `archive/unprocessed/`, backup rotation, temp cleanup,
+  logging itself.
+- **Critical** (attempt compensating move, alert, exit): archiving the original
   (exit 94), duplicate-index commit (93), normalized output move (92),
   duplicate-index prep (97).
 - **Catastrophic** (exit 99): unhandled exception anywhere in the pipeline.
 
 Non-critical failures never interrupt the happy path. Critical failures
-always attempt a compensating action (move processed file to failed,
-roll back index from `previous-duplicate-index.csv`) before exiting.
+always attempt a compensating action (move the original to
+`archive/unprocessed/`, so it can be dropped in again; roll back the index from
+`previous-duplicate-index.csv`) before exiting.
 
 ## 9. Context Dict as Pipeline State
 
@@ -157,8 +162,8 @@ keeping the pipeline callable as a unit — see `main()` in
 
 ## 10. Content-Describing File Names
 
-Every file of one bank file — normalized output, processed original, failed
-rows, logs, import outputs — is named `<base>-<stage>`, with
+Every file of one bank file in `data/` — normalized output, failed rows, logs,
+import outputs — is named `<base>-<stage>`, with
 `<base>` = `<run>-<bank>-<account>-<first>_<last>` (format in AGENTS.md, Key
 Directories). All files of one bank file sort together, and a name says what is
 in it; this gives a complete audit trail without a database.
@@ -177,6 +182,12 @@ in it; this gives a complete audit trail without a database.
   renames the log `<run>.log` that bash created.
 - **The importer** derives its names (`-imported`, `-import.log`,
   `-import-failed`) from the normalized file, so they follow automatically.
+- **The archived original** keeps the run id of its first arrival:
+  `archive/originals/<bank>/<account>/<run>-<first>_<last>-<sha8>.<ext>` or
+  `archive/unprocessed/<run>-<source name>`; a source name that already starts
+  with a run id (a copy from the archive) keeps it (`ARRIVAL_RUN_ID`, in
+  `csv_runtime` and in bash). So a reload processes the originals in the order
+  they first arrived.
 
 ## 11. Cron-Safe Orchestration
 
@@ -190,11 +201,17 @@ in it; this gives a complete audit trail without a database.
   `cp -p` keep an old mtime, but every write bumps ctime) and its last byte is a
   newline; after 10 min process anyway so a broken file gets reported.
 - **Idle runs** exit before the lock when `incoming/` and `normalized/` hold no
-  CSV and no `firefly-recalculate.flag` is pending: builtins only — no subshell, no
-  external command, no Python, no write (hard rule, see AGENTS.md "Idle cost").
+  CSV and neither `firefly-recalculate.flag` nor `archive-push-pending.flag` is
+  pending: builtins only — no subshell, no external command, no Python, no write
+  (hard rule, see AGENTS.md "Idle cost"). Every CSV glob skips Excel's `~$` lock
+  files.
 - Exit codes `0/65/75/99` are "Python handled it"; anything else triggers a
-  fallback move of the incoming file to `data/failed/` (`<run>-crashed-…` or
-  `<run>-move-failed-…`).
+  fallback move of the incoming file to `archive/unprocessed/` (`<run>-<source
+  name>`), unless that folder already holds its content.
+- **Archive to git** after the importer, still under the lock, in every run with
+  work: `git add -A` in `archive/`, a commit when anything changed, a push. A
+  failed push sets `archive-push-pending.flag`, alerts once, and every next run
+  pushes again.
 - Runs every minute; alerts go to stderr, which the TrueNAS cron job emails.
   Success is silent.
 
@@ -230,7 +247,7 @@ one `POST /api/v1/transactions`.
   `FireflyUnavailableError` ([engine/firefly/api.py](../../engine/firefly/api.py))
   stop the run and leave files in place, alerted once per outage via
   `data/firefly-import-blocked.flag`; any other rejection fails only that row
-  (to `data/failed/<base>-import-failed.csv`) and the file moves to
+  (to `data/failed-rows/<base>-import-failed.csv`) and the file moves to
   `data/imported/` as `<base>-imported-partial.csv`. A file the normalizer
   already marked `-normalized-partial` also ends up `-imported-partial`. Retry:
   move the `-import-failed.csv` into `data/normalized/` (→ `-imported-retry`).

@@ -21,9 +21,11 @@ patterns, and the transaction types the bank prints.
 ## Idle cost (hard rule)
 
 The cron job runs every minute, so an idle run must cost next to nothing. Until there is
-work (a CSV in `data/incoming/` or `data/normalized/`, or a pending
-`firefly-recalculate.flag`), `firefly-iii-feeder.bash` uses bash builtins only: no subshell,
-no external command, no Python, no file write. Every new check goes after that exit.
+work (a CSV in `data/incoming/` or `data/normalized/`, a pending `firefly-recalculate.flag`
+or `archive-push-pending.flag`), `firefly-iii-feeder.bash` uses bash builtins only: no
+subshell, no external command, no Python, no file write. Every new check goes after that exit.
+Excel's lock files (`~$<name>.csv`, left next to a CSV opened through the share) are no work:
+bash and the importer skip them.
 
 Measured on truenas-master: 1.9 ms CPU per idle run (bash alone: 1.2 ms); starting Python
 with the importer's imports costs 60 ms and 17 MB, 30 times as much. Re-measure after
@@ -41,13 +43,14 @@ Wiping it and loading it again must always be possible, with one command, and gi
 of the current code. After every structural change to the feeder or to Firefly, that is the
 normal way to give old transactions the new shape, not an emergency.
 
-- All input belongs in the private archive repo (being built:
-  [plans/00-archive-and-reload.md](plans/00-archive-and-reload.md)); `data/` and Firefly hold
-  nothing that cannot be remade.
+- All input belongs in the private archive repo `archive/`; `data/` and Firefly hold nothing
+  that cannot be remade. How it works, `start-over.bash`, setup and restore:
+  [docs/archive-and-reload.md](docs/archive-and-reload.md).
 - Fix nothing by hand in `data/` or in Firefly: a fix goes into the parser, the config or the
   accounts file. The only hand fix to input is one in the archive itself, where git keeps it.
 - Classification is outside this rule: a wipe keeps rules, categories and tags in Firefly but
   removes them from the transactions; reapplying them is up to the private tool that owns it.
+
 ## Key Directories
 
 | Path | Purpose |
@@ -57,21 +60,24 @@ normal way to give old transactions the new shape, not an emergency.
 | [engine/banks/](engine/banks/) | One sub-package per bank. Each must export `normalize_row()` and has a `README.md` (see "Banks") |
 | [engine/banks/fintro/](engine/banks/fintro/) | Reference bank: `normalize` (exports `normalize_row`), `extract_details`, `parsers`, `reconcile`; `debug_row` shows how a row is parsed |
 | [docs/output-contract.md](docs/output-contract.md) | What other tools may rely on in the normalized output and in Firefly |
+| [docs/archive-and-reload.md](docs/archive-and-reload.md) | The archive, what happens to each file and row, `start-over.bash`, setup, restore on a new server |
 | `plans/` | Plans for work in progress; once done, their lasting facts move into the docs and the plan is deleted (git keeps it) |
 | [engine/regression.py](engine/regression.py) | Regression test: every row of the bank CSVs through a git ref and the working tree, reporting each changed result |
 | [engine/firefly/](engine/firefly/) | Firefly III import: `api` (REST client), `import_normalized` (importer) |
 | [deploy/](deploy/) | Source of root-side helper scripts; installed by hand on each server, never run from here (see "Root helper") |
 | [config/](config/) | `<bank>.yaml` configs (bank name is the filename) + `app.env` (`FIREFLY_URL`, `FIREFLY_TOKEN`) |
-| [firefly-iii-feeder.bash](firefly-iii-feeder.bash) | Cron entry; `flock`, upload check (ctime ≥ 30 s + complete last line), normalizes each incoming CSV, then runs the importer |
-| `bank-csv-originals/` | Backup of every unique bank export, one subfolder per bank (`Fintro/`); source for regenerating `data/` |
+| [firefly-iii-feeder.bash](firefly-iii-feeder.bash) | Cron entry; `flock`, upload check (ctime ≥ 30 s + complete last line), normalizes each incoming CSV, runs the importer, then commits and pushes `archive/` |
+| [start-over.bash](start-over.bash) | Wipes the feeder's part of Firefly and reloads the archive (see "Start Over") |
+| `archive/` | Private git repo (server only, not in this repo): every export dropped in `incoming/`, in `originals/<bank>/<account>/` (finished) or `unprocessed/` (rejected, crashed); see [docs/archive-and-reload.md](docs/archive-and-reload.md) |
+| `bank-csv-originals/` | Exports from before the archive, one subfolder per bank: `Fintro/` is in the archive too, `Argenta/` (xlsx, pdf) enters it once the feeder reads those |
 | `data/incoming/` | Drop CSVs here to trigger processing |
 | `data/normalized/` | Normalized output waiting for import: `<base>-normalized[-partial].csv` |
 | `data/imported/` | Normalized files after import: `<base>-imported.csv` (`-imported-partial` if any row of the bank file failed, in the normalizer or the import; `-imported-retry[-partial]` for a retried `-import-failed` file) |
-| `data/processed/` | Originals after processing, own extension: `<base>-processed[-partial\|-failed].<ext>` |
-| `data/failed/` | Rows that failed normalization, dedup, or import (`<base>-normalize-failed.csv`, `-duplicate-failed.csv`, `-import-failed.csv`); whole originals bash moved: `<run>-crashed-<source name>` (Python crashed) or `<run>-move-failed-<source name>` (a critical file move failed) |
+| `data/failed-rows/` | Rows that failed normalization, dedup, or import: `<base>-normalize-failed.csv`, `-duplicate-failed.csv`, `-import-failed.csv` |
 | `data/duplicate-index/` | Per-account persistent dedup index (successfully normalized rows only) + backups `backups/<run>-<account>-duplicate-index.csv`, rotated per account |
 | `data/logs/` | `<base>.log` (normalizer) and `<base>-import.log` (mode, Firefly state read time, result and duration). `<time>-firefly-follow-up.log`: rules and running balances after a batch import, with durations |
 | `data/temp/` | Working files; cleaned up after each run, except after a critical error (it then holds the index rollback copy) |
+| `data-before-start-over/` | The previous `data/`, moved aside by `start-over.bash`; replaced by the next one |
 
 File names in `data/` describe the content: `<base>` = `<run>-<bank>-<account>-<first>_<last>`,
 e.g. `20261009-101500-001-fintro-BE68539007547034-2026-03-13_2026-10-07`, so all files of one
@@ -79,7 +85,8 @@ bank file sort together. `<run>` = start of the cron run + the file's number in 
 by construction); `<first>_<last>` = first and last transaction date (`date_format` of
 `primary_transaction_date` in the bank config). Before the bank is known, `<base>` is
 `<run>-unknown-<source name>`, and the log is `<run>.log` until the normalizer renames it. The
-source name is on the log's first line.
+source name is on the log's first line. Names in `archive/` keep the run id of the file's first
+arrival (see [docs/archive-and-reload.md](docs/archive-and-reload.md)).
 
 The token lives only in the server copy of `config/app.env` (mode 600); the
 SFTP watcher excludes that file, so a local copy is never uploaded over it.
@@ -137,23 +144,26 @@ Config: [ruff.toml](ruff.toml) — line-length 120, py310 target, selects `E,F,W
 hooks in [.pre-commit-config.yaml](.pre-commit-config.yaml).
 
 Regression test, before every parser change is committed (desktop, in the repo;
-the originals are only read via the share; exit 1 when anything changed):
+the archived originals are only read via the share; exit 1 when anything changed):
 
 ```bash
-python -m engine.regression [--base REF] [--show N] "//<server>/firefly-iii-feeder/bank-csv-originals/Fintro/*.csv"
+python -m engine.regression [--base REF] [--show N] "//<server>/firefly-iii-feeder/archive/originals/fintro/*/*.csv"
 ```
 
 Every reported change must be explained: fixed rows, and changed outputs that
 only add information. Verify the normalizer end to end on the server (via the share; `data/` is not
-synced) by placing a sample CSV in `data/incoming/`
-and inspecting `data/normalized/`, `data/failed/`, and `data/logs/` (failure
-reasons are in the normalizer log, not the `-import.log`); verify
+synced) by placing a real export in `data/incoming/`
+and inspecting `data/normalized/`, `data/failed-rows/`, and `data/logs/` (failure
+reasons are in the normalizer log, not the `-import.log`). Use a real export: every file
+dropped there is archived and pushed, and only an already archived one is dropped as a copy. Verify
 the importer with `--dry-run` on the server (the token lives there).
 
 Testing a change to `firefly-iii-feeder.bash` on the desktop (Git Bash): run it in
 a throwaway copy, never in the repo's own `data/`. Git Bash has no `flock`, so a stub
 stands in for it; the upload wait drops to 0 s; without `app.env` the importer ends
-with "FIREFLY IMPORT BLOCKED", as expected. Use the `/c/…` form for the folder: a `C:`
+with "FIREFLY IMPORT BLOCKED", and without `archive/.git` every run with work alerts
+"ARCHIVE NOT UNDER GIT", both as expected (to test the git step: `git init` in
+`archive/` with a local bare repo as `origin`). Use the `/c/…` form for the folder: a `C:`
 in `PATH` splits it.
 
 ```bash
@@ -179,7 +189,7 @@ Normalizer — [engine/process_csv.py](engine/process_csv.py) and
 | `75` | partial (some rows failed) |
 | `92` | normalized output not moved (index rolled back) |
 | `93` | duplicate index not committed |
-| `94` | original CSV not moved |
+| `94` | original not archived (it goes to `archive/unprocessed/`) |
 | `97` | duplicate index update not prepared |
 | `99` | unexpected exception |
 
@@ -237,10 +247,11 @@ re-importing a file is safe. Two modes, chosen per run (`BATCH_OLD_ROW_AGE_DAYS`
   failure alerts once; `data/firefly-follow-up-alerted.flag` keeps the retries
   every minute silent until the follow-up succeeds.
 
-Rows Firefly rejected go to `data/failed/<base>-import-failed.csv`. Dropping the
+Rows Firefly rejected go to `data/failed-rows/<base>-import-failed.csv`. Dropping the
 bank CSV again does not retry them: the duplicate index already has them. Fix the
 cause, then move that file to `data/normalized/`; the next run imports it (the
-alert names the exact paths).
+alert names the exact paths). Retrying other failures: [docs/archive-and-reload.md](docs/archive-and-reload.md),
+"Retrying a row or a file".
 
 Row → split mapping lives in `build_split()`:
 
@@ -323,41 +334,25 @@ root, through a passwordless sudo rule:
 ## Start Over (full reload)
 
 The normal way to apply a structural change to what is already in Firefly
-(hard rule "Rebuild from scratch"). `start-over.bash` will do all of this in one
-command, from the archive (plan 00); until then, by hand as below.
-
-Rows already in the duplicate index never reach the parser again, so a parser
-change only affects new rows. To give already imported transactions the new
-output too, wipe Firefly and `data/` and reload every original. Not needed for
+(hard rule "Rebuild from scratch"). Rows already in the duplicate index never
+reach the parser again, so a parser change only affects new rows; to give
+already imported transactions the new output too, start over. Not needed for
 a renamed bank column (add the name to `names`) or a changed `columns.required`
-(the index adapts, see architectural_patterns.md §7). A column the bank only
-recently added is absent from older originals: reloading fills it only after a
-fresh history export.
+(the index adapts, see architectural_patterns.md §7).
 
-Takes about an hour for ~14,500 rows (batch mode plus the follow-up). Run the
-regression test first (desktop); the commands below run on the server, as the
-cron user. Wait until `data/incoming/` and `data/normalized/` are empty, so no
-run is busy.
-
-Wipe Firefly's transactions and the expense/revenue accounts they created
-(asset accounts, rules and categories stay; the importer needs the asset
-accounts' IBANs). `destroy` stops partway with a 504, hence the loops:
+Run the regression test first (desktop), then on the server, from the root shell:
 
 ```bash
-cd <app-ds>/firefly-iii-feeder && . config/app.env
-ff() { curl -s -o /dev/null -w '%{http_code}' -X DELETE -H "Authorization: Bearer ${FIREFLY_TOKEN}" -H 'Accept: application/json' "${FIREFLY_URL}/api/v1/data/$1"; }
-for objects in transactions expense_accounts revenue_accounts; do until code=$(ff "destroy?objects=${objects}"); echo "${objects} ${code}"; [ "${code}" = 204 ]; do :; done; done
-echo "purge $(ff purge)"
+sudo -H -u <cron user> bash <app-ds>/firefly-iii-feeder/start-over.bash
 ```
 
-Every line ends in `504` (repeated) or `204`; anything else (`401`: token)
-loops forever, so stop it with Ctrl-C. `purge` must print `204`. Then empty `data/` (the originals stay) and
-reload them; the cron picks them up within a minute:
-
-```bash
-rm -rf data/duplicate-index data/normalized data/imported data/processed data/failed data/logs data/temp data/*.flag
-cp bank-csv-originals/Fintro/*.csv data/incoming/
-```
+It waits for a running cron run, asks for `WIPE`, commits and pushes the archive,
+wipes the feeder's transactions and the expense/revenue accounts they created
+(asset accounts, rules and categories stay), moves `data/` to
+`data-before-start-over/` and copies every archived original into `data/incoming/`.
+The cron job reloads them, about an hour for ~14,500 rows (batch mode plus the
+follow-up). What it does not restore, and how to fix a conflict in the archive:
+[docs/archive-and-reload.md](docs/archive-and-reload.md).
 
 ## Adding a New Bank
 

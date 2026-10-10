@@ -49,7 +49,7 @@ if [[ -f "${APP_ENV}" ]]; then
 	done <"${APP_ENV}"
 fi
 [[ -n "${FIREFLY_URL}" && -n "${FIREFLY_TOKEN}" ]] || stop "FIREFLY_URL or FIREFLY_TOKEN missing in ${APP_ENV}."
-[[ -d "${ARCHIVE_DIR}/.git" ]] || stop "${ARCHIVE_DIR} is not under git: set up its repo first (plan 00 step 2)."
+[[ -d "${ARCHIVE_DIR}/.git" ]] || stop "${ARCHIVE_DIR} is not under git: set up its repo first (docs/archive-and-reload.md, \"Setup\")."
 
 git=(git -c core.quotepath=off -C "${ARCHIVE_DIR}")
 # Only what the archive repo holds or the commit below adds: leftovers its .gitignore keeps out
@@ -78,7 +78,8 @@ EOF
 read -r -p 'Type WIPE to continue: ' answer
 [[ "${answer}" == WIPE ]] || stop "nothing changed."
 
-# Pending changes in the archive (a hand fix, §3.8 of plan 00) are part of what gets loaded
+# Pending changes in the archive (a hand fix after a conflict, docs/archive-and-reload.md) are
+# part of what gets loaded
 "${git[@]}" add -A || stop "git add failed in ${ARCHIVE_DIR}; nothing changed."
 changes=$("${git[@]}" diff --cached --name-status -M) || stop "git diff failed in ${ARCHIVE_DIR}; nothing changed."
 if [[ -n "${changes}" ]]; then

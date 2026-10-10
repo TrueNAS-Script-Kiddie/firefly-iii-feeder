@@ -9,7 +9,8 @@ entry point `normalize_row` in [normalize.py](normalize.py). All examples below 
   rejected as a whole).
 - UTF-8 with BOM, `;`-separated, one header row, 13 columns, newest row first.
 - Long histories come in several exports; overlapping periods are fine (duplicate index).
-- Originals are kept in `bank-csv-originals/Fintro/`.
+- Originals are archived in `archive/originals/fintro/<IBAN>/` (see
+  [docs/archive-and-reload.md](../../../docs/archive-and-reload.md)).
 
 ## Columns
 
