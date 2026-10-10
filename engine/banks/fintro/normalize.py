@@ -12,9 +12,9 @@ Pipeline per row:
     2b. Reformat cosmetic text (REPLACE_IN_* tables, card-number mask).
     2c. Assemble the normalized output dict.
 
-All regex/string parsing lives in extract_details. All cross-source decisions
-live in reconcile. This file contains only orchestration and the reformat
-tables that shape the user-visible notes text.
+Parsing of the details column lives in extract_details, cross-source decisions
+in reconcile. This file holds the orchestration, a few column checks, and the
+reformat tables that shape the user-visible notes text.
 """
 
 import re
@@ -183,6 +183,9 @@ def normalize_row(csv_row: dict[str, str]) -> dict[str, Any]:
     column_transaction_type = csv_row["transaction_type"].replace(" in euro", "")
     column_primary_transaction_date = parse_ddmmyyyy(csv_row["primary_transaction_date"])
     column_interest_date = parse_ddmmyyyy(csv_row["interest_date"])
+    # Only refused rows carry a reason, and those are filtered out; on an accepted row it would be lost
+    if csv_row.get("reject_reason", "").strip():
+        raise ValueError(f"Reden van weigering on an accepted row: '{csv_row['reject_reason']}'")
 
     # ==================================================================
     # PHASE 1b — EXTRACT DETAILS

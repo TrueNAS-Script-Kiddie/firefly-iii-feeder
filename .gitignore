@@ -5,6 +5,7 @@ config/app.env
 data/
 archive/
 data-before-start-over/
+bank-csv-originals/
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

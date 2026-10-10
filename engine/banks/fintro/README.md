@@ -28,7 +28,7 @@ entry point `normalize_row` in [normalize.py](normalize.py). All examples below 
 | Mededeling | `description` | — |
 | Details | `details` | free text, parsed (see below) |
 | Status | `status` | only `Geaccepteerd`; refused payments (`Geweigerd`) are filtered out |
-| Reden van weigering | `reject_reason` (optional) | — |
+| Reden van weigering | `reject_reason` (optional) | must be empty on an accepted row, else the row fails |
 
 ## Unique row
 
@@ -64,7 +64,8 @@ Phase 1 of `normalize_row` (see architectural_patterns.md §6) calls `extract_de
 segment is cut from the remaining text, so a later pattern cannot match it again.
 
 1. Postfixes anchored with `$`, cut first: `VALUTADATUM`, `BANKREFERENTIE`, `UITGEVOERD OP`, then
-   the message (`MEDEDELING : …` or `ZONDER MEDEDELING`).
+   the message (`MEDEDELING : …`, or one of the bank's own texts anchored with `^`, such as
+   `TERUGBETALING WOONKREDIET` or `NETTO INTERESTEN`), then `ZONDER MEDEDELING`.
 2. The rest, matched by leading pattern anchored with `^`: VERBETERING, STORTING, DOORLOPENDE
    OPDRACHT, DOMICILIERING, BUITENLANDSE OVERSCHRIJVING, OVERSCHRIJVING, BETALING, ANNULERING
    BETALING, MOBIELE BETALING, GELDOPNEMING.
