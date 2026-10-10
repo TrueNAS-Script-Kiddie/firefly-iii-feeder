@@ -1,8 +1,8 @@
 # Plan 02 — Argenta
 
-Status: **approved; to be carried out after [plan 01](01-core-fintro-firefly.md)** (file names, `interest_date`,
-foreign currency, the lookup of own accounts, the accounts file). Examples are made up (public
-repo); real rows stay in the terminal.
+Status: **approved; to be carried out after [plan 01](01-core-fintro-firefly.md)**, which brings
+the regression test and `debug_row` for every bank, the accounts file and the first start-over.
+Examples are made up (public repo); real rows stay in the terminal.
 
 Hard requirement for every step: **an idle run stays free** (AGENTS.md "Idle cost").
 
@@ -52,15 +52,24 @@ Established in the data:
 ## 1. Decisions
 
 1. ✅ **Mastercard as its own Firefly account** (kind `credit_card`), every purchase separately.
-2. ✅ **The current account pays off the card.** The PDF does not name that IBAN and every file
-   is processed separately, so the program must be given it: a field `paid_from` (the paying
-   IBAN) on the card account in `archive/accounts.yaml`, so a reload has it too
-   ([docs/archive-and-reload.md](../docs/archive-and-reload.md), rule 8);
-   it is added to the template `config/accounts.example.yaml`. Whether the normalizer or the
-   importer reads it is settled at execution. Without that value the repayment line fails.
-3. ✅ **Card account in the accounts file** (plan 01 step 5): IBAN = the BCC collection number
-   from the current-account export (so `Debet ten voordele van BCC` becomes a transfer), account
-   number = customer reference of the statement.
+2. ✅ **The current account pays off the card: `paid_from` in the accounts file, read by the
+   importer.** Example (made up): the statement has a line `DOMICILIERING VIA UW BANK 100,00+`.
+   The current account's export has the other side, `Debet ten voordele van BCC -100,00`, with the
+   card's IBAN as counterparty, so that row becomes a transfer current account → card. The
+   statement line must become the other side of that same transfer. It needs the current
+   account as counterparty, and the PDF does not name it.
+   - The card account in `archive/accounts.yaml` gets a field `paid_from` (the paying IBAN), also
+     in the template `config/accounts.example.yaml`.
+   - The normalizer marks the statement line with a new normalized column
+     `is_card_repayment` = `1` (like `is_cash_withdrawal`) and leaves its counterparty empty.
+   - The importer replaces the empty counterparty by the `paid_from` of the row's own account. No
+     `paid_from` → the row fails.
+
+   This way the normalizer, `debug_row` and the regression test never read `archive/`, and a
+   reload has the value (docs/archive-and-reload.md, rule 8).
+3. ✅ **Card account in the accounts file**: IBAN = the BCC collection number from the
+   current-account export (so `Debet ten voordele van BCC` becomes a transfer), account number =
+   customer reference of the statement.
 4. ✅ **Term deposit** (expired): its own closed account (kind `savings`), deposit number as
    account number → start and repayment are transfers, the interest is income from Argenta.
 5. ✅ **Dates**: see §2 "Four names per field". Card PDF: settlement date → main date, because
@@ -81,8 +90,16 @@ Established in the data:
    - Argenta xlsx, old layout: only the currency, no amount → note only; Firefly does not accept
      a foreign currency without an amount.
 10. ✅ **The file name of the original plays no role anywhere**: xlsx and pdf are recognized by
-    content (column header, statement text), like CSV now. The two non-statements in
-    `Mastercard/` are put by the user outside `bank-csv-originals/`.
+    content (column header, statement text), like CSV now.
+11. ✅ **Period in the file names of a statement = the period printed on it**, so you recognize
+    the statement by its name. Example (made up): a statement `van 05/11/2018 tot 04/12/2018` is
+    named `…-2018-11-05_2018-12-04-…`, whatever dates its lines carry. Mechanism: step 1 (a
+    reader may give the file's period) and step 4.
+12. ✅ **Numbers from an xlsx are written in their shortest exact form**: `3.1000000000000001`
+    (how Excel may store 3.1) → `3.1`, `45.0` → `45`. This is the same value Excel shows, it keeps
+    the "max 2 decimals" check of the amount working, and it makes the duplicate key
+    (`Referentie|Bedrag`, step 3) the same in every run. Should this rule ever change, the keys
+    change with it: start over, like any change to what the feeder derives.
 
 ## 2. Data flow and reading
 
@@ -142,6 +159,7 @@ Four names per field, from bank to Firefly:
 | Mededeling | `description` | `description` (card rows: parsed, see step 3) | `description` |
 | — | — | `opposing_account_bic` (empty: Argenta gives no BIC) | `destination_bic`/`source_bic` |
 | — | — | `is_cash_withdrawal` | Firefly's Cash account |
+| — (card PDF: repayment line) | — | `is_card_repayment` | transfer from the card's `paid_from` (§1.2) |
 | — (card PDF: original amount + currency) | — | `foreign_amount`, `foreign_currency_code` | `foreign_amount`, `foreign_currency_code` |
 | — | — | `notes` | `notes` |
 | — | — | `unmapped_*` (copy of parts of the notes) | not sent |
@@ -152,39 +170,63 @@ Firefly names differ from those; the translation happens only in `build_split()`
 
 ## 3. Steps (order = commits)
 
-Every step: `pre-commit`, regression test. On Fintro: zero differences; the Argenta files show
-up as "new in this version".
+Every step: `pre-commit`, regression test (`archive/originals/**/*`, plan 01 step 4). Fintro:
+zero differences. Argenta files: unreadable in both versions until step 3, from then on "new in
+this version" in the step that adds them. Each step updates the docs it makes wrong; step 5
+lists what is left.
 
 ### Step 1 — Accept xlsx and pdf
 
 1. `firefly-iii-feeder.bash`:
-   - `incoming/*.csv` → `*.csv *.xlsx *.pdf` (also in the idle check; globs are builtins).
-   - Upload check: "last byte is a newline" applies only to CSV; an xlsx (zip) or PDF never ends
-     that way, so with that check alone every file would wait 10 min without protection. New:
-     xlsx complete = zip end record (`PK\x05\x06`) in the last 64 KB; PDF complete = `%%EOF` in
-     the last 1 KB. With `tail -c`, only when there is a file.
+   - Every `!(~\$*).csv` glob on `incoming/` (idle check and loop) becomes
+     `!(~\$*).@(csv|xlsx|pdf)`, with `shopt -s nocaseglob` so `.PDF` and `.XLSX` count too. Both
+     are builtins. Excel leaves `~$<name>.xlsx` lock files like it does for CSV. The `normalized/`
+     globs stay `.csv`.
+   - Upload check per type, after the existing 30 s ctime wait:
+     - CSV: last byte is a newline (as now);
+     - xlsx (a zip): the zip end record `PK\x05\x06` in the last 64 KB;
+     - PDF: `%%EOF` in the last 1 KB.
+
+     With `tail -c … | grep -q`, only when there is a file. Each keeps the 10-minute fallback.
+     The newline test alone would never pass for xlsx or pdf: every such file would wait 10
+     minutes unprotected.
    - Repeat the idle measurement, ≤ 2 ms.
-   - From this step on, an xlsx or pdf without a config is rejected into `archive/unprocessed/`
-     instead of being ignored, with an alert per file.
-2. `load_csv_rows` → `load_rows(path, bank_configs)`, chooses by extension:
-   - `.csv`: unchanged.
-   - `.xlsx`: new `engine/core/xlsx_reader.py`, stdlib. First sheet, row 1 = header. Cell with a
-     date format → `YYYY-MM-DD`; other number → the text as stored; empty cell → `""`. Refuses
-     with a clear error: several sheets with data, formulas without a value, unknown cell type.
-   - `.pdf`: the table comes from a bank-specific reader, named in the yaml (`reader:`). Each
-     reader says "not mine" or returns rows with its own column names; after that
-     `autodetect_bank` works on the header as now.
-   - `_source_line` = Excel row number (header = 1, like CSV) or `p<page>/<line>` for PDF.
-3. `engine/regression.py` reads through `load_rows`; a file the old version cannot read (no
-   Argenta config yet) now aborts the test and from now on counts as "new in this version", with
-   the number of rows ok/failed.
+   - From this step on, an xlsx or pdf no config recognizes is rejected into
+     `archive/unprocessed/` with an alert, instead of being ignored.
+2. **`load_csv_rows(path)` → `load_rows(path, bank_configs)`** in `engine/core/csv_runtime.py`.
+   It chooses by extension (lower-cased) and returns `(rows, source_lines, period)`:
+   - `period`: `(first, last)` as ISO dates when the file states its own period (a statement,
+     §1.11), else `None`. `process_csv` uses it for the file names instead of the first and last
+     `primary_transaction_date` of the rows;
+   - `rows`: dicts with the file's own column names, as now;
+   - `source_lines`: a list of texts, one per row, naming where the row is in the file:
+     - `.csv`: unchanged reading; source lines `"2"`, `"3"`, … (header = 1, as now);
+     - `.xlsx`: new `engine/core/xlsx_reader.py`, stdlib. First sheet, row 1 = header. Source
+       line = the Excel row number, so a skipped empty row does not shift the numbers. Cell with
+       a date format → `YYYY-MM-DD`; other number → shortest exact form (§1.12); empty cell →
+       `""`. Refuses with a clear error: several sheets with data, formulas without a value,
+       unknown cell type;
+     - `.pdf`: the table comes from a bank-specific reader, named in the yaml (`reader:`). Each
+       reader says "not mine" or returns rows with its own column names and a source line
+       `p<page>/<line>` per row. After that, `autodetect_bank` works on the header as now.
+3. **`validate_and_prepare(rows, bank_cfg, source_lines=None)`** stores `source_lines[i]` as the
+   row's `_source_line`; without the argument it counts `"2"`, `"3"`, … as now. `_source_line`
+   is a text from now on, never a column of the row, so header detection and the failed-row
+   output do not see it. Log lines read as before ("source row 17", now also "source row p3/12").
+4. **Callers**:
+   - `engine/process_csv.py`: switches to `load_rows`.
+   - `engine/debug_row.py`: switches to `load_rows`; a `<row>` argument is compared as text with
+     `_source_line` (`17`, `p3/12`).
+   - `engine/regression.py`: calls `load_rows` when the version under test has it, else
+     `load_csv_rows`. HEAD keeps the old function until this step is committed.
 
 ### Step 2 — Shared helpers
 
-`parse_iban`, `extract_structured_ref`, `normalize_for_comparison`, `apply_replacements`,
-`parse_comma_decimal_amount` move from `engine/banks/fintro/parsers.py` to
-`engine/core/parsers.py`; Fintro imports them from there. No change in behaviour. Only now,
-because Argenta is the second user: then it is clear which form the shared version needs.
+`parse_iban`, `extract_structured_ref` (with `canonicalize_structured_ref`, which it calls),
+`normalize_for_comparison`, `apply_replacements` and `parse_comma_decimal_amount` move from
+`engine/banks/fintro/parsers.py` to `engine/core/parsers.py`; Fintro imports them from there. No
+change in behaviour. Only now, because Argenta is the second user: then it is clear which form
+the shared version needs.
 
 ### Step 3 — Argenta accounts (`config/argenta.yaml`, `engine/banks/argenta/`)
 
@@ -193,7 +235,8 @@ One config for current and savings account (same columns).
 | Column | Internal | Validation |
 |---|---|---|
 | Referentie | `external_id` | `^[A-Z][0-9][A-L][0-9]{2}[A-Z0-9]{11}$` |
-| Boekdatum / Valutadatum / Verrichtingsdatum | see §2 | ISO date |
+| Boekdatum | `primary_transaction_date` | ISO date; `date_format: "%Y-%m-%d"` (gives the period in the file names) |
+| Valutadatum / Verrichtingsdatum | see §2 | ISO date |
 | Rekening | `asset_account_iban` | IBAN (spaces allowed) |
 | Beschrijving | `transaction_type` | not empty |
 | Bedrag | `amount` | `^-?[0-9]+(\.[0-9]+)?$`; exact via `Decimal`, max 2 decimals, → `-2.00` |
@@ -201,7 +244,8 @@ One config for current and savings account (same columns).
 | Rekening tegenpartij, Naam tegenpartij, Mededeling | optional per type | — |
 
 `duplicate_key`: `Referentie|Bedrag` (point 0.2; the amount never changes, Argenta may reword a
-description). `partition_by: asset_account_iban`.
+description; the text of `Bedrag` as the reader writes it, §1.12). `partition_by:
+asset_account_iban`.
 
 **Every `Beschrijving` has a rule of its own; an unknown one makes the row fail.** Types get
 Fintro's vocabulary, so the later classification filters the same over both banks.
@@ -239,6 +283,8 @@ Mededeling:       USD SAINT-VAAST        08-05-17 13:01
 - A currency `EUR` before the name repeats the account currency → dropped explicitly; any other
   currency stays.
 
+Optional `engine/banks/argenta/debug_trace.py` (plan 01 step 4) for the Mededeling parsing.
+
 ### Step 4 — Mastercard statements (`config/argenta_mastercard.yaml`, `engine/banks/argenta_mastercard/`)
 
 1. `engine/core/pdf_text.py` (stdlib): Flate streams → pieces of text with page, x, y, font, text
@@ -250,59 +296,120 @@ Mededeling:       USD SAINT-VAAST        08-05-17 13:01
    `asset_account_number`), per card `Kaartnummer`.
    **Year of each `dd/mm`** from the period (a Dec→Jan statement crosses the year boundary), not
    from "nearest date".
-3. Kinds of lines: `Vorig saldo` (previous balance; check, no transaction), repayment
-   (`DOMICILIERING VIA UW BANK` / `Domiciliëring bij uw bank`, `+`) → transfer from the account
-   in §1.2, purchases/refunds, foreign currency + rate, `Subtotaal` and `Nieuw saldo` (new
-   balance; check). Unknown line → the statement fails.
+3. Kinds of lines:
+   - `Vorig saldo` (previous balance): check only, no transaction;
+   - repayment (`DOMICILIERING VIA UW BANK` / `Domiciliëring bij uw bank`, `+`):
+     `is_card_repayment=1`, counterparty empty (§1.2);
+   - purchases and refunds;
+   - foreign currency + rate;
+   - `Subtotaal` and `Nieuw saldo` (new balance): check only.
+
+   Unknown line → the statement fails.
 4. **Checks (Fintro's two-source approach):**
-   - per statement: previous balance + repayment + all lines = new balance, each amount with the
-     sign of the statement (made up: `100,00-` + `100,00+` + `42,50-` = `42,50-`), and per card
-     subtotal = sum of its lines. If it does not add up → the whole statement fails (a wrongly
-     read amount or missed line cannot get through that way).
-   - across sources (separate script on the desktop, like the regression test): new balance of
-     statement N = BCC debit on the current account the month after. Also catches missing
-     statements.
+   - **Per statement**, in the reader: previous balance + repayment + all lines = new balance,
+     each amount with the sign of the statement (made up: `100,00-` + `100,00+` + `42,50-` =
+     `42,50-`). Per card: subtotal = sum of its lines. If it does not add up → the whole
+     statement fails, so a wrongly read amount or a missed line cannot get through.
+   - **Across sources, automatically after each run**: the statements against the current
+     account. A single file never holds both sides, so this check runs over the archive, after
+     the normalizer has archived the run's files.
+     - What it checks: the new balance of statement N = the BCC debit on the current account
+       the month after; every BCC debit since the first statement has a statement; the previous
+       balance of statement N+1 = the new balance of N.
+     - What it skips: debits before the first statement (§1.7), and a statement whose debit
+       lies after the end of the newest current-account export (not known yet).
+     - Where: `engine/banks/argenta_mastercard/archive_check.py`, with
+       `check_archive(archive_dir) -> list[str]` (one text per difference).
+     - Who runs it: a new generic `engine/archive_checks.py`. It finds every
+       `engine/banks/*/archive_check.py`, so `engine/core/` still knows no bank names, runs them
+       all, and alerts every difference on stderr.
+     - When: `firefly-iii-feeder.bash`, after the importer, only when this run processed a bank
+       file (of any bank) and `incoming/` holds no export any more. During a reload the
+       statements and the current-account exports would otherwise be compared half-loaded. A
+       run that leaves a file waiting (still uploading) skips the check, and the run that
+       processes that file does it. Off the idle path, like everything after the idle exit.
+     - A difference that stays alerts again at every run that processes a file: once per drop,
+       as with an account missing from the accounts file (plan 01 step 5).
+     - By hand, for `debug_row`-like inspection: `PYTHONPATH=. python3 -m engine.archive_checks --print`
+       runs the same checks and prints instead of alerting.
+
 5. Rows: `Klantenreferentie, Afschriftdatum, Volgnummer, Datum transactie, Datum verrekening,
    Omschrijving, Bedrag, Munt, Origineel bedrag, Originele munt, Koers, Kaartnummer`.
-   `duplicate_key` = statement date + sequence number (`2018-12-04/03`, made up): a statement
-   never changes, and two identical lines each get their own key that way.
-   `partition_by` = customer reference. Period in the file name = period of the statement.
-6. All 110 statements must succeed, checked per generation.
+   - `duplicate_key` = statement date + sequence number (`2018-12-04/03`, made up): a statement
+     never changes, and two identical lines each get their own key that way.
+   - `partition_by` = customer reference.
+   - The reader returns the printed period `from … to …` as `period` (step 1, §1.11).
+6. Importer (`engine/firefly/import_normalized.py`), with the accounts file of plan 01 step 5:
+   - `is_card_repayment` at the end of `NORMALIZED_FIELDNAMES`;
+   - `paid_from` in the accounts file (template, validation: credit cards only);
+   - `build_split`: a row with `is_card_repayment=1` gets the `paid_from` of its own account as
+     counterparty, and so becomes a transfer that claims or creates the transfer of the
+     current-account row. No `paid_from` → the row fails.
+7. All 110 statements must succeed, checked per generation; `engine.archive_checks --print` without differences.
 
 ### Step 5 — Documentation
 
 In the structure of plan 01 step 0:
-- **`engine/banks/argenta/README.md`** (fixed headings) for the accounts and the card statements:
-  export, columns, unique row, field mapping, parsing rules, quirks (dummy IBAN, non-unique
-  reference, own IBAN on interest, BCC settlement, missing months = no activity), `paid_from`
-  in the accounts file, checks. `argenta/CLAUDE.md` with `@README.md`,
-  `argenta_mastercard/CLAUDE.md` with `@../argenta/README.md`.
-- **AGENTS.md**: `data/incoming/` accepts csv, xlsx, pdf; Argenta in the "Banks" table (also in
-  README "Supported Banks"); readers for non-CSV in "Adding a New Bank"; the regression command
-  covers xlsx and pdf in `archive/originals/`.
-- **`docs/output-contract.md`**: Argenta's transaction types and unique keys.
+
+- **`engine/banks/argenta/README.md`** (fixed headings) for the accounts and the card
+  statements:
+  - export, columns, unique row, field mapping, parsing rules;
+  - quirks: dummy IBAN, non-unique reference, own IBAN on interest, BCC settlement, missing
+    months = no activity;
+  - `paid_from` in the accounts file;
+  - checks, incl. the archive check (statements against the current account).
+
+  `argenta/CLAUDE.md` with `@README.md`, `argenta_mastercard/CLAUDE.md` with
+  `@../argenta/README.md`.
+- **AGENTS.md**:
+  - "Idle cost": work is "an export in `data/incoming/`", not "a CSV";
+  - "Key Directories": `data/incoming/` takes csv, xlsx, pdf;
+  - "Banks": Argenta;
+  - "Adding a New Bank": readers for non-CSV (`reader:` in the yaml, `source_lines`, `period`), optional `archive_check.py`;
+  - "Running": `engine.archive_checks --print`; "Key Directories": `engine/archive_checks.py`.
+- **README.md**: overview (exports instead of CSVs), "Supported Banks", project tree.
+- **architectural_patterns.md**:
+  - §1: the "Load" step is `load_rows` (CSV, xlsx, bank reader for pdf);
+  - §11: the upload check per file type; the archive checks after the importer, and when they run;
+  - §13: `is_card_repayment` → `paid_from`.
+- **`docs/output-contract.md`**:
+  - Keys: Argenta's `external_id` (`Referentie`, not unique) and the card statement (no
+    `external_id`);
+  - drop "Rows are unique per (`asset_account_iban`, `external_id`)": `row_key` is the unique
+    key;
+  - the new column `is_card_repayment`;
+  - Argenta's transaction types;
+  - a line under "Changes".
+- **docs/archive-and-reload.md** "Known limitations": drop the bullet that Argenta's exports
+  cannot be read yet. `bank-csv-originals/` itself stays (backup, easy to open), and its row in
+  AGENTS.md "Key Directories" is not changed.
 - This plan disappears; the lasting facts are then in the files above.
 
-## 4. Full reload (you, on the server)
+## 4. Start over with Argenta (you, on the server)
 
-Needed because the Fintro rows to Argenta and Rabobank (point 0.12, plan 01 §1.8) are now
-expenses/income: without reloading, the Argenta import adds a transfer → **counted twice**. Once,
-after both plans; it also gives existing transactions the changes of plan 01.
+Needed because the Fintro rows to Argenta (point 0.12) are now expenses/income: without a start-over,
+the Argenta import adds a transfer next to them → **counted twice**.
 
 1. ⏰ Ask about §1.7 first (older card statements).
-2. Complete `archive/accounts.yaml` (plan 01 step 5): Argenta current and savings, Argenta
-   Mastercard (§1.3, `paid_from` §1.2, opening balance §1.7), term deposit (§1.4), the Rabobank
-   accounts with their correction booking (plan 01 §1.8). The xlsx exports have no balance
-   column: the Argenta opening balance comes from the Argenta app or an account statement.
-3. `start-over.bash` as the cron user (AGENTS.md "Start Over"): wipes Firefly (also the expense/revenue accounts with Argenta
-   and Rabobank IBANs) and reloads everything in the archive; the accounts file is applied before
-   the first import.
-4. Right after it, once: the originals in `bank-csv-originals/Argenta/` (with `Mastercard/<year>/`)
-   into `data/incoming/`, as the cron user (AGENTS.md "Server access"). They are imported and land in the archive; after that
-   `bank-csv-originals/` can go.
-5. Check: the Firefly balance of every Argenta account = balance in the Argenta app today; card
-   balance = last `Nieuw saldo`; both Rabobank accounts end on 0; every own transfer appears
-   exactly once; nothing left in `archive/unprocessed/`.
+2. Add to `archive/accounts.yaml`, through a dry-run as in plan 01 step 5:
+   - the Argenta current and savings accounts;
+   - the Argenta Mastercard (§1.3), with `paid_from` (§1.2) and its opening balance (§1.7);
+   - the term deposit (§1.4).
+
+   The xlsx exports have no balance column: the Argenta opening balance comes from the Argenta
+   app or an account statement.
+3. `start-over.bash` as the cron user (AGENTS.md "Start Over"): wipes Firefly (also the
+   expense/revenue accounts with Argenta IBANs) and reloads the archive; the first run applies
+   the accounts file before importing.
+4. Right after it, through the share, copy into `data/incoming/` (flat: the files themselves,
+   not their folders): the xlsx files of `bank-csv-originals/Argenta/` and the statements in
+   `Mastercard/<year>/`. Not before the start-over: cron
+   would import them into the old Firefly at once. `bank-csv-originals/` stays as it is.
+5. Check:
+   - the Firefly balance of every Argenta account = the balance in the Argenta app today;
+   - card balance = the last `Nieuw saldo`;
+   - every own transfer appears exactly once;
+   - nothing in `archive/unprocessed/`.
 
 Takes about an hour (~14,000 Fintro rows in batch + ~750 Argenta rows).
 
