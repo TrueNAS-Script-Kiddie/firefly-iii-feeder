@@ -21,6 +21,7 @@ from engine.core.csv_runtime import (
 from engine.core.csv_validation import (
     autodetect_bank,
     extract_duplicate_key,
+    map_row,
     validate_and_prepare,
 )
 from engine.core.row_state import FIREFLY_ID, classify_duplicate, load_row_state, state_filename
@@ -178,9 +179,7 @@ def main() -> None:
         all_filtered = not validated_rows
         if all_filtered:
             partition_regex = bank_cfg["columns"]["required"].get(partition_by, {}).get("regex")
-            mapped_rows = [
-                {name: raw.get(column, "").strip() for name, column in column_map.items()} for raw in csv_rows
-            ]
+            mapped_rows = [map_row(raw, column_map) for raw in csv_rows]
             valid_rows = [
                 r for r in mapped_rows if not partition_regex or re.fullmatch(partition_regex, r.get(partition_by, ""))
             ]

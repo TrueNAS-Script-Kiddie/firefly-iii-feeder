@@ -136,10 +136,11 @@ type, and an amount in details that exactly repeats the row amount (`EUR 1.234,5
 On the server (the row state is in `data/`, which is not synced):
 
 ```bash
-# Row-state status, every details step, the values found, the result or exact failure
-PYTHONPATH=. python3 -m engine.banks.fintro.debug_row <csv> <line-or-Volgnummer> [...]
+# Mapped columns, filter or validation, row-state status, every details step, the values found,
+# the result or exact failure
+PYTHONPATH=. python3 -m engine.debug_row <csv> <line-or-Volgnummer> [...]
 ```
 
 `<line>` is the "source row" in the normalizer log, or a Volgnummer (`2019-00135`; also finds
-filtered rows such as pending ones). Before committing a parser change, run the regression test
-(AGENTS.md "Testing").
+filtered rows such as pending ones). The details steps come from [debug_trace.py](debug_trace.py).
+Before committing a parser change, run the regression test (AGENTS.md "Testing").

@@ -170,7 +170,7 @@ Firefly names differ from those; the translation happens only in `build_split()`
 
 ## 3. Steps (order = commits)
 
-Every step: `pre-commit`, regression test (`archive/originals/**/*`, plan 01 step 4). Fintro:
+Every step: `pre-commit`, regression test (`archive/originals/**/*`, AGENTS.md "Testing"). Fintro:
 zero differences. Argenta files: unreadable in both versions until step 3, from then on "new in
 this version" in the step that adds them. Each step updates the docs it makes wrong; step 5
 lists what is left.
@@ -215,10 +215,10 @@ lists what is left.
    output do not see it. Log lines read as before ("source row 17", now also "source row p3/12").
 4. **Callers**:
    - `engine/process_csv.py`: switches to `load_rows`.
-   - `engine/debug_row.py`: switches to `load_rows`; a `<row>` argument is compared as text with
-     `_source_line` (`17`, `p3/12`).
-   - `engine/regression.py`: calls `load_rows` when the version under test has it, else
-     `load_csv_rows`. HEAD keeps the old function until this step is committed.
+   - `engine/debug_row.py`: switches to `load_rows`; its `source_lines` (now counted from 2) come
+     from `load_rows`. A `<row>` argument is already compared as text (`17`, later `p3/12`).
+   - `engine/regression.py`, `read_file`: calls `load_rows` when the version under test has it,
+     else `load_csv_rows`. HEAD keeps the old function until this step is committed.
 
 ### Step 2 — Shared helpers
 
@@ -283,7 +283,8 @@ Mededeling:       USD SAINT-VAAST        08-05-17 13:01
 - A currency `EUR` before the name repeats the account currency → dropped explicitly; any other
   currency stays.
 
-Optional `engine/banks/argenta/debug_trace.py` (plan 01 step 4) for the Mededeling parsing.
+Optional `engine/banks/argenta/debug_trace.py` (AGENTS.md "Key Directories") for the Mededeling
+parsing.
 
 ### Step 4 — Mastercard statements (`config/argenta_mastercard.yaml`, `engine/banks/argenta_mastercard/`)
 

@@ -34,11 +34,12 @@ firefly-iii-feeder/
 ├── engine/
 │   ├── process_csv.py             # Normalizer entry point
 │   ├── regression.py              # Regression test for parser changes
+│   ├── debug_row.py               # Why a row fails or is skipped (any bank)
 │   ├── core/                      # csv_runtime, csv_validation,
 │   │                              # row_state, completion, runtime
 │   ├── banks/
 │   │   └── fintro/                # Per-bank package: README (export, parsing),
-│   │                              # normalize, extract_details, parsers, reconcile, debug_row
+│   │                              # normalize, extract_details, parsers, reconcile, debug_trace
 │   └── firefly/                   # api (REST client), import_normalized
 ├── docs/
 │   ├── output-contract.md         # What other tools may rely on

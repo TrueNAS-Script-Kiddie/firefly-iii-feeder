@@ -69,24 +69,11 @@ def validate_and_prepare(
     filtered: Counter[str] = Counter()
 
     for source_line, raw_row in enumerate(csv_rows, start=2):  # start=2: row 1 is the header
-        mapped_row: dict[str, Any] = {}
+        mapped_row: dict[str, Any] = map_row(raw_row, column_map)
 
-        # Map CSV columns to internal names
-        for internal_name, csv_name in column_map.items():
-            mapped_row[internal_name] = raw_row.get(csv_name, "").strip()
-
-        # Apply filter rules (exact-match list or regex)
-        skip_reason = None
-        for internal_name, cfg in columns_cfg["required"].items():
-            value = mapped_row[internal_name]
-            if ("filter" in cfg and value not in cfg["filter"]) or (
-                "filter_regex" in cfg and not re.fullmatch(cfg["filter_regex"], value)
-            ):
-                skip_reason = f"{internal_name} '{value}'"
-                break
-
-        if skip_reason:
-            filtered[skip_reason] += 1
+        filtered_column = filtered_by(mapped_row, bank_config)
+        if filtered_column:
+            filtered[f"{filtered_column} '{mapped_row[filtered_column]}'"] += 1
             continue
 
         # Regex validation: mark the row instead of failing the whole file;
@@ -104,6 +91,22 @@ def validate_and_prepare(
         validated_rows.append(mapped_row)
 
     return validated_rows, column_map, filtered
+
+
+def map_row(raw_row: dict[str, str], column_map: dict[str, str]) -> dict[str, str]:
+    """The row under its internal names, values stripped."""
+    return {internal_name: raw_row.get(csv_name, "").strip() for internal_name, csv_name in column_map.items()}
+
+
+def filtered_by(mapped_row: dict[str, str], bank_config: dict[str, Any]) -> str | None:
+    """The first required column whose `filter` (exact-match list) or `filter_regex` drops the row, else None."""
+    for internal_name, cfg in bank_config["columns"]["required"].items():
+        value = mapped_row[internal_name]
+        if ("filter" in cfg and value not in cfg["filter"]) or (
+            "filter_regex" in cfg and not re.fullmatch(cfg["filter_regex"], value)
+        ):
+            return internal_name
+    return None
 
 
 # ---------------------------------------------------------------------------

@@ -27,7 +27,7 @@ RE_IBAN_BIC = re.compile(
 
 
 def record_step(trace: list[tuple[str, str, str]] | None, step: str, removed: str, remaining: str) -> None:
-    """Debug trace for debug_row: what a step cut out and what is left."""
+    """Debug trace for debug_trace.py: what a step cut out and what is left."""
     if trace is not None:
         trace.append((step, removed, remaining))
 
@@ -45,7 +45,7 @@ def extract_details(
     Raises ValueError if unmatched residual content remains after all patterns.
 
     `trace`, when given, collects (step, removed text, remaining text) per matched
-    step (see debug_row).
+    step (see debug_trace.py).
     """
     remaining_details = details
 

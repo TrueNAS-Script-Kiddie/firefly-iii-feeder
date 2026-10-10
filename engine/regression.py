@@ -1,15 +1,22 @@
 """
-Regression test for the normalizer: run every row of the given bank CSVs
+Regression test for the normalizer: run every row of the given bank exports
 through two versions of the code — a git ref (default HEAD) and the working
 tree — and report every row whose result changes.
 
-Usage (desktop, in the repo; the CSVs are only read, e.g. from the share):
-  python -m engine.regression [--base REF] [--show N] <csv-or-glob> [...]
+Usage (desktop, in the repo; the exports are only read, e.g. from the share):
+  python -m engine.regression [--base REF] [--show N] <file-or-glob> [...]
+  python -m engine.regression "//<server>/firefly-iii-feeder/archive/originals/**/*"
 
-Rows are identified by (account IBAN, Volgnummer), so overlapping exports are
-counted once. Categories: fixed (failed -> ok), broken (ok -> failed),
-changed (ok -> ok, other output), failing differently (failed -> failed, other
-reason). Exit code 1 when anything changed, so it can gate a change.
+A glob is recursive (** crosses folders), so the archive's originals of every
+bank and file type are covered at once. Rows are identified as the row state
+does, by account and duplicate key, each computed with that version's own code
+and config, so overlapping exports are counted once; a row without a key by
+<file>:<line>. A file a version cannot read gives that version no rows and is
+listed with the reason. Categories: fixed (failed -> ok), broken (ok ->
+failed), changed (ok -> ok, other output), failing differently (failed ->
+failed, other reason), new / gone in this version (the row exists in one
+version only), readable in one version only. Exit code 1 when anything
+changed, so it can gate a change.
 """
 
 import argparse
@@ -51,29 +58,52 @@ def load_engine(root: str):
     return import_from(root, "engine.core.csv_runtime"), import_from(root, "engine.core.csv_validation")
 
 
-def run(root: str, paths: list[str]) -> dict[tuple[str, str], tuple[str, object, str]]:
-    """(account, external_id) -> (status, result, 'file:line'); status ok / failed / invalid."""
+def read_file(root: str, csv_runtime, csv_validation, configs: dict, path: str):
+    """Validated rows, bank config and bank module of one file, as process_csv reads it."""
+    raw_rows = csv_runtime.load_csv_rows(path)
+    bank_cfg = csv_validation.autodetect_bank(raw_rows, configs)
+    bank = import_from(root, f"engine.banks.{bank_cfg['bank']}")
+    return csv_validation.validate_and_prepare(raw_rows, bank_cfg)[0], bank_cfg, bank
+
+
+def row_identity(csv_validation, row: dict, bank_cfg: dict, where: str) -> str:
+    """'<account>|<duplicate key>' as the row state has it (account as process_csv names it); else `where`."""
+    key = csv_validation.extract_duplicate_key(row, bank_cfg)
+    if not key:
+        return where
+    partition_by = bank_cfg.get("duplicate_key", {}).get("partition_by")
+    account = row.get(partition_by, "").replace(" ", "").upper() if partition_by else bank_cfg["bank"]
+    return f"{account}|{key}"
+
+
+def run(root: str, paths: list[str]) -> tuple[dict[str, tuple[str, object, str]], dict[str, str]]:
+    """
+    identity -> (status, result, 'file:line'), status ok / failed / invalid; and
+    path -> reason for every file this version cannot read.
+    """
     csv_runtime, csv_validation = load_engine(root)
     configs = csv_runtime.load_all_bank_configs(os.path.join(root, "config"))
-    results: dict[tuple[str, str], tuple[str, object, str]] = {}
+    results: dict[str, tuple[str, object, str]] = {}
+    unreadable: dict[str, str] = {}
     for path in paths:
-        raw_rows = csv_runtime.load_csv_rows(path)
-        bank_cfg = csv_validation.autodetect_bank(raw_rows, configs)
-        bank = import_from(root, f"engine.banks.{bank_cfg['bank']}")
-        validated = csv_validation.validate_and_prepare(raw_rows, bank_cfg)[0]
+        try:
+            validated, bank_cfg, bank = read_file(root, csv_runtime, csv_validation, configs, path)
+        except Exception as exc:  # noqa: BLE001 - an unreadable file is a result to compare
+            unreadable[path] = f"{type(exc).__name__}: {exc}"
+            continue
         for row in validated:
-            key = (row.get("asset_account_iban", ""), row.get("external_id", ""))
-            if key in results:
-                continue
             where = f"{os.path.basename(path)}:{row.get('_source_line', '?')}"
+            identity = row_identity(csv_validation, row, bank_cfg, where)
+            if identity in results:
+                continue
             if "_validation_error" in row:
-                results[key] = ("invalid", row["_validation_error"], where)
+                results[identity] = ("invalid", row["_validation_error"], where)
                 continue
             try:
-                results[key] = ("ok", bank.normalize_row(row), where)
+                results[identity] = ("ok", bank.normalize_row(row), where)
             except Exception as exc:  # noqa: BLE001 - any failure is a result to compare
-                results[key] = ("failed", str(exc), where)
-    return results
+                results[identity] = ("failed", str(exc), where)
+    return results, unreadable
 
 
 def checkout(ref: str, target: str) -> None:
@@ -90,22 +120,36 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--base", default="HEAD", help="git ref to compare against (default HEAD)")
     parser.add_argument("--show", type=int, default=15, help="examples per category (default 15, 0 = all)")
-    parser.add_argument("csv", nargs="+", help="bank CSV files or glob patterns")
+    parser.add_argument("files", nargs="+", help="bank exports or glob patterns (** is recursive)")
     args = parser.parse_args()
 
-    paths = sorted({p for pattern in args.csv for p in (glob.glob(pattern) or [pattern])})
+    paths: set[str] = set()
+    for pattern in args.files:
+        matched = [p for p in glob.glob(pattern, recursive=True) if os.path.isfile(p)]
+        if not matched:
+            print(f"no file matches {pattern}", file=sys.stderr)
+            return 2
+        paths.update(matched)
+    paths_sorted = sorted(paths)
     with tempfile.TemporaryDirectory() as base_root:
         checkout(args.base, base_root)
-        old = run(base_root, paths)
-    new = run(REPO_ROOT, paths)
+        old, old_unreadable = run(base_root, paths_sorted)
+    new, new_unreadable = run(REPO_ROOT, paths_sorted)
 
     categories: dict[str, list[str]] = collections.defaultdict(list)
     changed_fields: collections.Counter = collections.Counter()
-    for key in sorted(set(old) | set(new)):
-        old_status, old_result, where = old.get(key, ("absent", None, "?"))
-        new_status, new_result, where = new.get(key, ("absent", None, where))
-        label = f"{where} {key[1]}"
-        if old_status == new_status == "ok":
+    new_rows: collections.Counter = collections.Counter()  # ok / failed among rows new in this version
+    for identity in sorted(set(old) | set(new)):
+        old_status, old_result, where = old.get(identity, ("absent", None, "?"))
+        new_status, new_result, where = new.get(identity, ("absent", None, where))
+        label = where if identity == where else f"{where} {identity}"
+        if old_status == "absent":
+            new_rows["ok" if new_status == "ok" else "failed"] += 1
+            outcome = "ok" if new_status == "ok" else f"{new_status}: {new_result}"
+            categories["new in this version"].append(f"{label}\n      {outcome}")
+        elif new_status == "absent":
+            categories["gone in this version"].append(f"{label}\n      was {old_status}")
+        elif old_status == new_status == "ok":
             # Union, so a field dropped from (or added to) the output is reported too
             diffs = [f for f in {**old_result, **new_result} if old_result.get(f) != new_result.get(f)]
             if diffs:
@@ -120,10 +164,27 @@ def main() -> int:
         elif old_status == new_status and old_result != new_result:
             categories["failing differently"].append(f"{label}\n      was: {old_result}\n      now: {new_result}")
 
+    unreadable_in_both = []
+    for path in sorted(set(old_unreadable) | set(new_unreadable)):
+        name = os.path.basename(path)
+        if path in old_unreadable and path in new_unreadable:
+            unreadable_in_both.append(f"{name}\n      {new_unreadable[path]}")
+        else:
+            was, now = old_unreadable.get(path, "readable"), new_unreadable.get(path, "readable")
+            categories["readable in one version only"].append(f"{name}\n      was: {was}\n      now: {now}")
+
     print(f"base {args.base} vs working tree, {len(paths)} files, {len(new)} unique rows")
     print(f"  failing: {sum(s != 'ok' for s, _, _ in old.values())} -> {sum(s != 'ok' for s, _, _ in new.values())}")
+    print(f"  unreadable files: {len(old_unreadable)} -> {len(new_unreadable)}")
+    if unreadable_in_both:
+        print(f"\n== unreadable in both versions (not a change): {len(unreadable_in_both)}")
+        for item in unreadable_in_both:
+            print(f"   {item}")
     for category, items in categories.items():
-        print(f"\n== {category}: {len(items)}")
+        if category == "new in this version":
+            print(f"\n== {category}: {len(items)} (ok {new_rows['ok']}, failed {new_rows['failed']})")
+        else:
+            print(f"\n== {category}: {len(items)}")
         if category.startswith("changed"):
             print(f"   fields: {dict(changed_fields)}")
         for item in items if args.show == 0 else items[: args.show]:

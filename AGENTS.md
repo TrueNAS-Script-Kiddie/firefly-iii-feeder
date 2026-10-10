@@ -75,11 +75,12 @@ into the parser (`debug_row` shows where a row gets stuck).
 | [engine/process_csv.py](engine/process_csv.py) | Normalizer entry point; orchestrates all stages. `main()` + `NORMALIZED_FIELDNAMES` |
 | [engine/core/](engine/core/) | Shared pipeline modules: `csv_runtime`, `csv_validation`, `row_state`, `completion`, `runtime` |
 | [engine/banks/](engine/banks/) | One sub-package per bank. Each must export `normalize_row()` and has a `README.md` (see "Banks") |
-| [engine/banks/fintro/](engine/banks/fintro/) | Reference bank: `normalize` (exports `normalize_row`), `extract_details`, `parsers`, `reconcile`; `debug_row` shows how a row is parsed |
+| [engine/banks/fintro/](engine/banks/fintro/) | Reference bank: `normalize` (exports `normalize_row`), `extract_details`, `parsers`, `reconcile`; `debug_trace` (its part of `debug_row`) |
 | [docs/output-contract.md](docs/output-contract.md) | What other tools may rely on in the normalized output and in Firefly |
 | [docs/archive-and-reload.md](docs/archive-and-reload.md) | The archive, what happens to each file and row, `start-over.bash`, setup, restore on a new server |
 | `plans/` | Plans for work in progress; once done, their lasting facts move into the docs and the plan is deleted (git keeps it) |
-| [engine/regression.py](engine/regression.py) | Regression test: every row of the bank CSVs through a git ref and the working tree, reporting each changed result |
+| [engine/regression.py](engine/regression.py) | Regression test: every row of the bank exports through a git ref and the working tree, reporting each changed result |
+| [engine/debug_row.py](engine/debug_row.py) | Why a row fails or is skipped, for every bank; a bank adds its own trace in an optional `engine/banks/<bank>/debug_trace.py` (`show_trace(row)`) |
 | [engine/firefly/](engine/firefly/) | Firefly III import: `api` (REST client), `import_normalized` (importer) |
 | [deploy/](deploy/) | Source of root-side helper scripts; installed by hand on each server, never run from here (see "Root helper") |
 | [config/](config/) | `<bank>.yaml` configs (bank name is the filename) + `app.env` (server only, see "Setup") |
@@ -131,8 +132,8 @@ feeder folder runs as that user (`sudo -H -u <cron user> …`; without `-H` git 
 PYTHONPATH=. python3 -m engine.process_csv <csv_path> <run> <logfile_path>   # <run>: YYYYMMDD-HHMMSS-NNN
 
 # Why a row fails or is skipped; on the server (the row state is in data/), reads only.
-# Fintro for now: engine/banks/fintro/README.md, "Checking"
-PYTHONPATH=. python3 -m engine.banks.fintro.debug_row <csv> <line-or-Volgnummer> [...]
+# <row>: the "source row" of the normalizer log, or an external_id (also finds filtered rows)
+PYTHONPATH=. python3 -m engine.debug_row <file> <row> [<row> ...]
 
 # Importer only; --dry-run builds every request but sends and moves nothing
 PYTHONPATH=. python3 -m engine.firefly.import_normalized [--dry-run] [--show N] [csv ...]
@@ -144,10 +145,12 @@ success is silent.
 ## Testing
 
 Regression test, before every parser change is committed (desktop, in the repo;
-the archived originals are only read via the share; exit 1 when anything changed):
+the archived originals are only read via the share; exit 1 when anything changed).
+`**` is recursive, so this covers every bank and file type; a file a version cannot
+read is listed with the reason, and rows only one version has are reported apart:
 
 ```bash
-python -m engine.regression [--base REF] [--show N] "//<server>/firefly-iii-feeder/archive/originals/fintro/*/*.csv"
+python -m engine.regression [--base REF] [--show N] "//<server>/firefly-iii-feeder/archive/originals/**/*"
 ```
 
 Every reported change must be explained: fixed rows, and changed outputs that

@@ -1,6 +1,6 @@
 # Plan 01 — Core, Fintro and Firefly setup
 
-Status: **in progress — steps 0 to 3 done; next: step 4.** To be carried out before
+Status: **in progress — steps 0 to 4 done; next: step 5.** To be carried out before
 [plan 02 (Argenta)](02-argenta.md).
 Nothing here is Argenta-specific, but plan 02 builds on it. Examples are made up (public
 repo); real rows stay in the terminal.
@@ -67,70 +67,19 @@ finance tool (private repo); what is one-off per server or impossible via the AP
 Every step: `pre-commit`, regression test (AGENTS.md "Testing"). On Fintro every step gives zero
 differences. Each step updates the docs it makes wrong; step 6 lists what is left.
 
-Done; their lasting facts are in AGENTS.md, architectural_patterns.md, the Fintro README and
-`docs/output-contract.md`:
+Done; their lasting facts are in AGENTS.md, architectural_patterns.md, the Fintro README,
+`docs/output-contract.md` and the docstrings of `engine/regression.py` and `engine/debug_row.py`:
 
 - **Step 0** — documentation reorganized: per-bank README, output contract (`781da6a`).
 - **Step 1** — file names in `data/` describe bank, account and period (`5a01be5`).
 - **Step 2** — Fintro: `interest_date`, `foreign_amount` / `foreign_currency_code` (`21ce05b`).
 - **Step 3** — importer: own accounts by IBAN or account number, foreign amount, currencies,
   `row_key` as `internal_reference` (`035a425`).
-
-### Step 4 — Regression test and `debug_row`
-
-Neither changes what the cron job does. The regression test runs on the desktop: it needs git, for
-two versions of the code. `debug_row` runs on the server: it reads the row state in `data/`.
-
-**1. `engine/regression.py`**
-
-- **Row identity = what the row state uses**: (account, duplicate key), computed per version
-  with that version's own code and config:
-  - account = the `partition_by` value without spaces, upper case (as `process_csv` does), else
-    the bank name;
-  - duplicate key = `extract_duplicate_key(row, bank_cfg)`;
-  - a row without a key (e.g. it failed validation) is identified by `<file>:<line>`.
-
-  Today it is (IBAN, `external_id`), which breaks for a bank whose `external_id` is not unique
-  (plan 02). Printed label: `<file>:<line> <account>|<key>`.
-- **Recursive glob**: `glob.glob(pattern, recursive=True)`, files only. Today `**` acts as `*`.
-- **A file one version cannot read** (loading or `autodetect_bank` raises) no longer aborts the
-  test: that version gets no rows from it, and the report counts the file per version with the
-  reason. Rows only the working tree has are a category of their own, "new in this version",
-  with their count ok / failed. Plan 02 needs this from its first step.
-- Docstring and AGENTS.md "Testing": the command covers every bank and file type at once:
-
-  ```bash
-  python -m engine.regression [--base REF] [--show N] "//<server>/firefly-iii-feeder/archive/originals/**/*"
-  ```
-
-- Check: Fintro 0 differences, and the same number of unique rows as the old `regression.py`
-  reports on the same files (for Fintro both identities are one row per Volgnummer per account).
-
-**2. Generic `engine/debug_row.py`** (replaces `engine/banks/fintro/debug_row.py`)
-
-```bash
-PYTHONPATH=. python3 -m engine.debug_row <file> <row> [<row> ...]
-```
-
-- Loads the file as `process_csv` does, detects the bank, validates.
-- `<row>` = the line as the normalizer log names it ("source row 17"), or a value of
-  `external_id` (exact match, also among filtered rows).
-- Per row it shows:
-  - every mapped column of the bank config (required and optional), not a hard-coded list;
-  - when filtered: which column's `filter` / `filter_regex` dropped it, with the value (same
-    test as `validate_and_prepare`);
-  - when invalid: the validation error;
-  - row-state status and Firefly id: `show_duplicate_status` from today's Fintro script, which is
-    already generic;
-  - the bank's own trace, when the bank has one: optional module
-    `engine/banks/<bank>/debug_trace.py` with `show_trace(row: dict) -> None`. Fintro's details
-    trace (`extract_details` step by step, the values found) moves into
-    `engine/banks/fintro/debug_trace.py`;
-  - the `normalize_row` result, or the exact exception.
-- `engine/banks/fintro/debug_row.py` is deleted.
-- Check, on the server: on a Fintro original in `archive/originals/`, the output for a normal
-  row, a filtered (pending) row, a row that fails, and a Volgnummer gives the same information as
-  the old script.
+- **Step 4** — regression test over `archive/originals/**/*` for every bank and file type, rows
+  identified as the row state does, unreadable files listed per version; generic
+  `engine/debug_row.py` with an optional per-bank `debug_trace.py` (Fintro's: the details
+  steps). Checked: Fintro 0 differences and the same unique rows as before; on the server
+  `debug_row` shows what the old Fintro script showed.
 
 ### Step 5 — Own accounts via a file
 
@@ -307,16 +256,13 @@ in Firefly, nothing is created or updated. Step 7 does the real test.
 
 ### Step 6 — Documentation
 
-What steps 4 and 5 leave, in the structure of step 0:
+What step 5 leaves, in the structure of step 0:
 
 - **AGENTS.md**:
-  - "Running": `engine.debug_row`, `--accounts-only`;
-  - "Testing": the recursive regression command;
-  - "Key Directories": the Fintro row (no `debug_row`), a row for `engine/debug_row.py`;
+  - "Running": `--accounts-only`;
   - "Setup": step "Own (asset) accounts" becomes "write `archive/accounts.yaml`" (template
     `config/accounts.example.yaml`).
-- **README.md**: the project tree (`debug_row`, `config/accounts.example.yaml`).
-- **Fintro README**: "Checking" (`engine.debug_row`, its Fintro trace).
+- **README.md**: the project tree (`config/accounts.example.yaml`).
 - **architectural_patterns.md** §13: the accounts file is applied before the Firefly state is
   read; an invalid file blocks like an outage. §11: the blocked flag also covers that.
 - **docs/archive-and-reload.md**:
