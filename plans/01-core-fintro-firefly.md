@@ -124,6 +124,9 @@ plans/NN-*.md                      temporary (below)
 > part of it since: `data/failed/` and `data/processed/` no longer exist; originals go to
 > `archive/originals/` or `archive/unprocessed/<run>-<name>` (no `-crashed-` / `-move-failed-`
 > names), failed rows to `data/failed-rows/` ([docs/archive-and-reload.md](../docs/archive-and-reload.md)).
+> And `9bc800f` replaced the duplicate index (`data/duplicate-index/`) by the row state
+> (`data/row-state/<account>.csv`, architectural_patterns.md §7), which also holds each row's
+> Firefly id.
 
 ### Step 1 — File names in `data/` ✅ `5a01be5`
 
@@ -273,7 +276,7 @@ enabled as soon as a row with that currency is really imported (at the latest at
    `(IBAN, external_id)`, because not every bank has a unique `external_id` (plan 02); glob
    recursively (`**`), so one command covers `archive/originals/`, all banks and
    accounts.
-2. Generic `engine/debug_row.py`: columns, duplicate status, result or exact error; a bank may
+2. Generic `engine/debug_row.py`: columns, row-state status and Firefly id, result or exact error; a bank may
    add its own step-by-step trace. Fintro's details trace stays.
 
 ### Step 5 — Own accounts via a file
@@ -388,23 +391,13 @@ the archive. It lives where it is used, so nothing is copied from the desktop.
 ### Step 6 — Documentation
 
 In the structure of step 0 (AGENTS.md, README, architectural_patterns.md, Fintro README,
-output-contract):
-- `interest_date`, foreign currency, enabling currencies, own accounts by IBAN or account number,
-  `row_key` / `internal_reference` (also in the contract), where steps 2–3 did not already;
-- recursive regression command over `archive/originals/`; generic `debug_row`;
-- accounts file: template, `archive/accounts.yaml`, applied on change;
-- new section **"Firefly setup (by hand, once per server)"**, everything in one place (now
-  scattered over the gotchas and "Root helper"), only general steps:
-  1. Firefly ≥ 6.7.0.
-  2. Admin → Configuration → `enable_batch_processing` on (in the GUI).
-  3. Create a Personal Access Token → `FIREFLY_TOKEN` in `config/app.env` (expires after at most
-     1 year).
-  4. Default currency EUR (also possible via the API, `/v1/currencies/{code}/primary`; one-off,
-     so by hand).
-  5. Install the root helper + sudo rule for the cron user.
-  6. Cron job in TrueNAS (every minute, lock guard, "Hide Standard Error" off).
-  7. Archive repo: Forgejo repo, deploy key, `git init` in `archive/` (now in
-     docs/archive-and-reload.md "Setup"; move it here and link to it from there).
+output-contract). Already documented: `interest_date`, foreign currency, enabling currencies, own
+accounts by IBAN or account number, `row_key` / `internal_reference`, and the checklist
+AGENTS.md "Setup (by hand, once per server)" (the archive repo's steps stay in
+docs/archive-and-reload.md "Setup", linked from it). What remains:
+- recursive regression command over `archive/originals/`; generic `debug_row` (step 4);
+- accounts file: template, `archive/accounts.yaml`, applied on change; it replaces the checklist
+  step "Own (asset) accounts" (step 5);
 - repeat the idle measurement and update the number if it changes.
 
 ## 4. Testing

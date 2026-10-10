@@ -142,4 +142,4 @@ PYTHONPATH=. python3 -m engine.banks.fintro.debug_row <csv> <line-or-Volgnummer>
 
 `<line>` is the "source row" in the normalizer log, or a Volgnummer (`2019-00135`; also finds
 filtered rows such as pending ones). Before committing a parser change, run the regression test
-(AGENTS.md "Lint").
+(AGENTS.md "Testing").

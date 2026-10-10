@@ -3,12 +3,13 @@
 Ingests bank-exported CSVs, validates and normalizes transaction data,
 deduplicates against a persistent per-account row state, emits a unified
 output format, and imports that output into Firefly III via its REST API.
-Runs unattended from a TrueNAS cron job.
+Runs unattended from a TrueNAS cron job. How it works:
+[.claude/rules/architectural_patterns.md](.claude/rules/architectural_patterns.md).
 
 ## Tech Stack
 
 - **Python 3.10+** — processing engine ([engine/](engine/))
-- **Bash** — cron-safe orchestrator with `flock` and upload check (ctime ≥ 30 s + complete last line); idle runs use builtins only
+- **Bash** — cron-safe orchestrator ([firefly-iii-feeder.bash](firefly-iii-feeder.bash))
 - **YAML** — per-bank configuration ([config/](config/))
 - **Dependencies** — Python stdlib + `pyyaml` only (no build step; the Firefly client uses `urllib`)
 
@@ -17,6 +18,13 @@ Runs unattended from a TrueNAS cron job.
 Everything in this public repo is English: code, comments, docs, plans, commit messages, file
 names. Only text that is the bank's own stays in its language: export column names, message
 patterns, and the transaction types the bank prints.
+
+## Nothing personal (hard rule)
+
+The repo is public. Examples are made up, also amounts, account numbers and dates; before every
+commit, scan the staged diff for IBAN-like strings and real names. Counterparty rules, categories
+and tags do not belong here either: Firefly rules apply what they can on import, and a separate
+tool in a private repo classifies the rest through Firefly's API.
 
 ## Idle cost (hard rule)
 
@@ -51,6 +59,15 @@ normal way to give old transactions the new shape, not an emergency.
 - Classification is outside this rule: a wipe keeps rules, categories and tags in Firefly but
   removes them from the transactions; reapplying them is up to the private tool that owns it.
 
+## Normalization principle
+
+**No meaningful information may be lost.** Every piece of the bank row that says
+something about the transaction must end up in a normalized field. The parser
+may drop only text that adds nothing — a filler or label (`VAN`, `MEDEDELING :`)
+or a repeat of something already kept — and only explicitly, through a named
+pattern or rule. Anything it cannot place makes the row fail; the fix then goes
+into the parser (`debug_row` shows where a row gets stuck).
+
 ## Key Directories
 
 | Path | Purpose |
@@ -65,31 +82,26 @@ normal way to give old transactions the new shape, not an emergency.
 | [engine/regression.py](engine/regression.py) | Regression test: every row of the bank CSVs through a git ref and the working tree, reporting each changed result |
 | [engine/firefly/](engine/firefly/) | Firefly III import: `api` (REST client), `import_normalized` (importer) |
 | [deploy/](deploy/) | Source of root-side helper scripts; installed by hand on each server, never run from here (see "Root helper") |
-| [config/](config/) | `<bank>.yaml` configs (bank name is the filename) + `app.env` (`FIREFLY_URL`, `FIREFLY_TOKEN`) |
-| [firefly-iii-feeder.bash](firefly-iii-feeder.bash) | Cron entry; `flock`, upload check (ctime ≥ 30 s + complete last line), normalizes each incoming CSV, runs the importer, then commits and pushes `archive/` |
-| [start-over.bash](start-over.bash) | Wipes every transaction and counterparty in Firefly and reloads the archive (see "Start Over") |
-| `archive/` | Private git repo (server only, not in this repo): every export dropped in `incoming/`, in `originals/<bank>/<account>/` (finished) or `unprocessed/` (rejected, crashed); see [docs/archive-and-reload.md](docs/archive-and-reload.md) |
+| [config/](config/) | `<bank>.yaml` configs (bank name is the filename) + `app.env` (server only, see "Setup") |
+| [firefly-iii-feeder.bash](firefly-iii-feeder.bash) | Cron entry: normalizes each incoming CSV, imports, commits and pushes `archive/` |
+| [start-over.bash](start-over.bash) | Wipes Firefly's transactions and reloads the archive (see "Start Over") |
+| `archive/` | Private git repo (server only, not in this repo): every export dropped in `incoming/`, in `originals/<bank>/<account>/` (finished) or `unprocessed/` (rejected, crashed) |
 | `bank-csv-originals/` | Exports from before the archive, one subfolder per bank: `Fintro/` is in the archive too, `Argenta/` (xlsx, pdf) enters it once the feeder reads those |
 | `data/incoming/` | Drop CSVs here to trigger processing |
 | `data/normalized/` | Normalized output waiting for import: `<base>-normalized[-partial].csv` |
 | `data/imported/` | Normalized files after import: `<base>-imported.csv` (`-imported-partial` if any row of the bank file failed, in the normalizer or the import) |
 | `data/failed-rows/` | Rows that failed normalization, dedup, or import: `<base>-normalize-failed.csv`, `-duplicate-failed.csv`, `-import-failed.csv` |
-| `data/row-state/` | Row state, one file per account (`<account>.csv`): every bank row the feeder knows, the bank's values (to detect a rewritten row) and the Firefly transaction it became (`firefly_id`). Backups `backups/<run>-<account>.csv`, rotated per account. See architectural_patterns.md §7 |
+| `data/row-state/` | Per account (`<account>.csv`): every bank row the feeder knows and its Firefly id; `backups/`. See architectural_patterns.md §7 |
 | `data/logs/` | `<base>.log` (normalizer) and `<base>-import.log` (mode, Firefly state read time, result and duration). `<time>-firefly-follow-up.log`: rules and running balances after a batch import, with durations; `<time>` is when the batch set the flag, so retries append |
+| `data/*.flag` | State between runs (pending follow-up or push, one alert per outage): architectural_patterns.md §11 |
 | `data/temp/` | Working files (output and row state being prepared); emptied after each bank file |
 | `data-before-start-over/` | The previous `data/`, moved aside by `start-over.bash`; replaced by the next one |
 
 File names in `data/` describe the content: `<base>` = `<run>-<bank>-<account>-<first>_<last>`,
-e.g. `20261009-101500-001-fintro-BE68539007547034-2026-03-13_2026-10-07`, so all files of one
-bank file sort together. `<run>` = start of the cron run + the file's number in that run (unique
-by construction); `<first>_<last>` = first and last transaction date (`date_format` of
-`primary_transaction_date` in the bank config). Before the bank is known, `<base>` is
-`<run>-unknown-<source name>`, and the log is `<run>.log` until the normalizer renames it. The
-source name is on the log's first line. Names in `archive/` keep the run id of the file's first
-arrival (see [docs/archive-and-reload.md](docs/archive-and-reload.md)).
-
-The token lives only in the server copy of `config/app.env` (mode 600); the
-SFTP watcher excludes that file, so a local copy is never uploaded over it.
+e.g. `20261009-101500-001-fintro-BE68539007547034-2026-03-13_2026-10-07`. `<run>` = start of the
+cron run + the file's number in that run; `<first>_<last>` = first and last transaction date
+(`date_format` of `primary_transaction_date` in the bank config). How they are made:
+architectural_patterns.md §10.
 
 ## Deploy = save
 
@@ -115,16 +127,11 @@ feeder folder runs as that user (`sudo -H -u <cron user> …`; without `-H` git 
 # Manual single run (normalize data/incoming/, then import data/normalized/)
 ./firefly-iii-feeder.bash
 
-# TrueNAS cron job: every minute, as the user that owns the folder, "Hide Standard Error" off
-# (stderr = alert email), with the encrypted-dataset lock-guard in the Command field
-
 # Normalizer only (debugging)
 PYTHONPATH=. python3 -m engine.process_csv <csv_path> <run> <logfile_path>   # <run>: YYYYMMDD-HHMMSS-NNN
 
-# Debug a row: whether the account's row state already has it (then it is skipped, with its
-# Firefly id, or a conflict shows the differing fields), every parser step, the values found,
-# the exact failure. Run on the server: the row state is in data/, which is not synced.
-# <line> = "source row" in the normalizer log <base>.log, or a Volgnummer (reads only)
+# Why a row fails or is skipped; on the server (the row state is in data/), reads only.
+# Fintro for now: engine/banks/fintro/README.md, "Checking"
 PYTHONPATH=. python3 -m engine.banks.fintro.debug_row <csv> <line-or-Volgnummer> [...]
 
 # Importer only; --dry-run builds every request but sends and moves nothing
@@ -134,14 +141,7 @@ PYTHONPATH=. python3 -m engine.firefly.import_normalized [--dry-run] [--show N] 
 Alerts go to stderr ([engine/core/runtime.py](engine/core/runtime.py) `alert`);
 success is silent.
 
-## Lint
-
-```bash
-ruff check .
-pre-commit run --all-files   # what every commit runs: ruff, ruff format, shfmt, shellcheck
-```
-Config: [ruff.toml](ruff.toml) — line-length 120, py310 target, selects `E,F,W,I,UP,B`;
-hooks in [.pre-commit-config.yaml](.pre-commit-config.yaml).
+## Testing
 
 Regression test, before every parser change is committed (desktop, in the repo;
 the archived originals are only read via the share; exit 1 when anything changed):
@@ -177,40 +177,39 @@ cp <sample export> "$T/repo/data/incoming/"
 cd "$T/repo" && PATH="$T/bin:$PATH" bash ./firefly-iii-feeder.bash
 ```
 
+## Lint
+
+```bash
+ruff check .
+pre-commit run --all-files   # what every commit runs: ruff, ruff format, shfmt, shellcheck
+```
+Config: [ruff.toml](ruff.toml) — line-length 120, py310 target, selects `E,F,W,I,UP,B`;
+hooks in [.pre-commit-config.yaml](.pre-commit-config.yaml).
+
 ## Exit Codes
 
 Normalizer — [engine/process_csv.py](engine/process_csv.py) and
-[engine/core/completion.py](engine/core/completion.py):
+[engine/core/completion.py](engine/core/completion.py), in `finalize` order for 92–97
+(architectural_patterns.md §8):
 
 | Code | Outcome |
 |------|---------|
 | `0` | success, all_full_duplicates, or all_filtered (nothing to do) |
+| `1` | Python stopped before `finalize` (traceback on stderr); bash archives the original |
 | `65` | structure_failed / all_failed |
 | `75` | partial (some rows failed) |
+| `97` | row-state update not prepared |
 | `92` | normalized output not moved (nothing recorded) |
 | `93` | row state not replaced (the output is taken back out of `data/normalized/`) |
 | `94` | original not archived (its rows are recorded) |
-| `97` | row-state update not prepared |
 | `99` | unexpected exception |
 
-On 92–97 the original goes to `archive/unprocessed/`, so it is not retried every minute.
+Where the original goes per outcome: [docs/archive-and-reload.md](docs/archive-and-reload.md), rule 2.
 
 Importer — [engine/firefly/import_normalized.py](engine/firefly/import_normalized.py):
-`0` all imported, `75` some rows failed, `69` Firefly unreachable or token refused
-(files stay in `data/normalized/`; alerted once per outage via
-`data/firefly-import-blocked.flag`), `70` unexpected crash (files stay; traceback
-alerted once via `data/firefly-import-crashed.flag`, removed by the next run that
-ends without crashing). `data/firefly-recalculate.flag` marks a batch
-follow-up that is still pending (see below).
-
-## Normalization principle
-
-**No meaningful information may be lost.** Every piece of the bank row that says
-something about the transaction must end up in a normalized field. The parser
-may drop only text that adds nothing — a filler or label (`VAN`, `MEDEDELING :`)
-or a repeat of something already kept — and only explicitly, through a named
-pattern or rule. Anything it cannot place makes the row fail; the fix then goes
-into the parser (`debug_row` shows where a row gets stuck).
+`0` all imported, `75` some rows failed, `69` Firefly unreachable or token refused (files stay
+in `data/normalized/`), `70` unexpected crash (files stay). Alerted once per outage or crash
+through flags (architectural_patterns.md §11).
 
 ## Banks
 
@@ -225,69 +224,9 @@ loads it by itself when working in the bank's folder (`CLAUDE.md` there imports 
 
 ## Firefly III Import
 
-Categories and tags are out of scope. Firefly rules apply what they can on
-import; everything else is classified by a separate tool in a private repo,
-through Firefly's API. Nothing personal (counterparty rules, categories, tags)
-belongs in this repo.
+How rows become transactions (modes, transfers, failures): architectural_patterns.md §13;
+the field mapping: [docs/output-contract.md](docs/output-contract.md). Gotchas:
 
-One `POST /api/v1/transactions` per row, with `error_if_duplicate_hash`, so
-re-importing a file is safe. Two modes, chosen per run (`BATCH_OLD_ROW_AGE_DAYS`,
-`BATCH_OLD_ROWS_THRESHOLD`; the age cutoff is relative to the day of the run):
-
-- **Per row** (default; ~0.3 s per recent row): Firefly applies rules and
-  recalculates running balances immediately. Cost grows with the age of the
-  row, because every later balance of the account is recalculated (~3 s for a
-  2015 row). Hence each file is sent oldest first (banks export newest first):
-  every row is then the latest of its account (newest first roughly doubles
-  the time of a few hundred rows).
-- **Batch** (more than 20 rows older than 6 months, i.e. history imports;
-  ~0.2 s per row): rows are submitted with `batch_submission`. At the end of the
-  run `batch/finish` applies the rules and the root helper recalculates all
-  running balances (~1 min at 14,500 transactions).
-  `data/firefly-recalculate.flag` stays until both succeeded, so an interrupted
-  or failed follow-up is retried by the next run, even without new files. A
-  failure alerts once; `data/firefly-follow-up-alerted.flag` keeps the retries
-  every minute silent until the follow-up succeeds.
-
-Rows Firefly rejected go to `data/failed-rows/<base>-import-failed.csv`, also a row
-Firefly answers with a 5xx while it answers `GET about` (so one row it crashes on cannot
-block every run; a 5xx with `about` failing too, or the third such row in a row
-(`ROW_5XX_OUTAGE_STREAK`: Firefly cannot store anything), is an outage, exit 69). Those rows
-leave the row state again, so after fixing the cause the next export holding them retries
-them; or copy the original from `archive/originals/` into `data/incoming/`. Retrying other
-failures: [docs/archive-and-reload.md](docs/archive-and-reload.md), "Retrying a row or a file".
-
-Row → split mapping lives in `build_split()`:
-
-- Sign of `amount` decides withdrawal / deposit; `asset_account_iban` (else
-  `asset_account_number`) must match the IBAN or the account number of a Firefly
-  asset account (read every run). A counterparty that is the row's own account
-  fails the row.
-- A counterparty account without an IBAN (foreign account number) goes to
-  `opposing_account_number` → `source_number` / `destination_number`: Firefly
-  validates `*_iban` as an IBAN, `*_number` is free text.
-- `foreign_amount` / `foreign_currency_code` go to Firefly's fields of that name;
-  a currency disabled in Firefly is enabled (logged), one Firefly doesn't know
-  fails the row.
-- `row_key` → `internal_reference`.
-- Counterparty IBAN or account number of an own asset account (matched against
-  both fields) → **transfer**, deduplicated by
-  "match or create": the first side creates it, the other side claims it
-  (same accounts, same amount, ±7 days). Order and history coverage of the
-  accounts' CSVs don't matter. The transfer carries only the first side's
-  data: the claiming side's Volgnummer (`external_id`), notes and bank
-  reference stay in its `data/imported/` file, not in Firefly.
-- Empty description → counterparty name → first line of `notes` (Firefly
-  requires a description).
-- No counterparty → `(onbekend)`, except cash withdrawals (Firefly's Cash
-  account). A bank's own transactions (fees, interest) get the bank as
-  counterparty in its module (see the bank's README).
-
-Gotchas:
-
-- **Firefly ≥ 6.7.0 is required.** Before it (issue #12710) the duplicate hash
-  included the batch flag, so a row imported per row and again in batch mode
-  was stored twice.
 - Firefly's **duplicate hash covers every field** of the split (SHA-256 of the
   whole request row, absent fields as null; only `import_hash_v2`, `original_source`
   and `batch_submission` are left out).
@@ -296,9 +235,6 @@ Gotchas:
   a row whose `firefly_id` is set is never sent again, and a re-dropped bank CSV
   stops at the row state before the importer. To give rows already in Firefly the
   new fields: Start Over.
-- **`enable_batch_processing` must be on** (Firefly admin configuration, set it
-  in the GUI: the configuration API stores it as text, which Firefly ignores).
-  While it is off, batch mode silently does the full per-row work.
 - Firefly's duplicate check includes **deleted** transactions. After deleting
   transactions, also `DELETE /api/v1/data/purge`, or a re-import silently
   counts them as "already present".
@@ -307,7 +243,27 @@ Gotchas:
   transactions does not delete the expense/revenue accounts they created
   (`objects=expense_accounts` / `revenue_accounts`).
 - Dates must be ISO; Firefly parses `dd/mm/yyyy` as US month/day without error.
-- Personal Access Tokens expire after at most one year → "FIREFLY IMPORT BLOCKED" alert.
+
+## Setup (by hand, once per server)
+
+1. **Firefly III ≥ 6.7.0.** Before it (issue #12710) the duplicate hash included the batch flag,
+   so a row imported per row and again in batch mode was stored twice.
+2. **`enable_batch_processing` on**, in Firefly's admin configuration in the GUI: the
+   configuration API stores it as text, which Firefly ignores. While it is off, batch mode
+   silently does the full per-row work.
+3. **Default currency EUR** in Firefly.
+4. **Own (asset) accounts**, each with its IBAN or account number: without one, every row of that
+   account fails.
+5. **`config/app.env`** on the server, mode 600, owned by the cron user: `FIREFLY_URL` and
+   `FIREFLY_TOKEN` (a Personal Access Token; it expires after at most one year → "FIREFLY IMPORT
+   BLOCKED" alert). The SFTP watcher excludes the file, so a local copy is never uploaded over it.
+6. **Feeder folder** owned by the cron user, `firefly-iii-feeder.bash` executable (SFTP sets no
+   execute bit, a git clone does).
+7. **Root helper and its sudo rule** (below).
+8. **Archive repo**: [docs/archive-and-reload.md](docs/archive-and-reload.md), "Setup".
+9. **Cron job** in the TrueNAS GUI: every minute, as the user that owns the folder, "Hide
+   Standard Error" off (stderr = alert email), with the encrypted-dataset lock-guard in the
+   Command field.
 
 ## Root helper (running balances)
 
@@ -343,20 +299,8 @@ already imported transactions the new output too, start over. Not needed for
 a renamed bank column (add the name to `names`) or a changed `columns.required`
 (the row state adapts, see architectural_patterns.md §7).
 
-Run the regression test first (desktop), then on the server, from the root shell:
-
-```bash
-sudo -H -u <cron user> bash <app-ds>/firefly-iii-feeder/start-over.bash
-```
-
-It waits for a running cron run, asks for `WIPE`, commits and pushes the archive,
-wipes every withdrawal, deposit, transfer and reconciliation and every expense/revenue account
-in Firefly, also those entered by hand (asset accounts with their opening balances, rules and
-categories stay), moves `data/` to
-`data-before-start-over/` and copies every archived original into `data/incoming/`.
-The cron job reloads them, about an hour for ~14,000 rows (batch mode plus the
-follow-up). What it does not restore, and how to fix a conflict in the archive:
-[docs/archive-and-reload.md](docs/archive-and-reload.md).
+Run the regression test first (desktop). The command, what it does and what it does not restore:
+[docs/archive-and-reload.md](docs/archive-and-reload.md), "`start-over.bash`".
 
 ## Adding a New Bank
 
@@ -377,15 +321,3 @@ follow-up). What it does not restore, and how to fix a conflict in the archive:
    header, and `process_csv.py` imports the bank module dynamically via
    `importlib.import_module(f"engine.banks.{bank_name}")`. The importer needs
    no change either, as long as the account exists in Firefly with its IBAN.
-
-## Hooks / Settings
-
-`.claude/settings.local.json` (local, gitignored) only whitelists
-`ruff check`, `pre-commit run`, and `git add` for permission prompts. No hooks
-are configured at project level.
-
-## Additional Documentation
-
-See [.claude/rules/architectural_patterns.md](.claude/rules/architectural_patterns.md)
-for design patterns, pipeline phases, reconciliation strategy, and error
-criticality tiers.

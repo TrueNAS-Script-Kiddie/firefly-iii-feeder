@@ -146,7 +146,7 @@ Four names per field, from bank to Firefly:
 | — | — | `notes` | `notes` |
 | — | — | `unmapped_*` (copy of parts of the notes) | not sent |
 
-"Internal" = the name after reading, which validation, duplicate index and `normalize_row` work
+"Internal" = the name after reading, which validation, row state and `normalize_row` work
 with. "Normalized" = the fixed columns of `NORMALIZED_FIELDNAMES`, the same for every bank. The
 Firefly names differ from those; the translation happens only in `build_split()`.
 
@@ -277,9 +277,9 @@ In the structure of plan 01 step 0:
   reference, own IBAN on interest, BCC settlement, missing months = no activity), `paid_from`
   in the accounts file, checks. `argenta/CLAUDE.md` with `@README.md`,
   `argenta_mastercard/CLAUDE.md` with `@../argenta/README.md`.
-- **AGENTS.md / README**: `data/incoming/` accepts csv, xlsx, pdf; Argenta in the "Banks" table;
-  readers for non-CSV in "Adding a New Bank"; the regression command covers xlsx and pdf in
-  `archive/originals/`.
+- **AGENTS.md**: `data/incoming/` accepts csv, xlsx, pdf; Argenta in the "Banks" table (also in
+  README "Supported Banks"); readers for non-CSV in "Adding a New Bank"; the regression command
+  covers xlsx and pdf in `archive/originals/`.
 - **`docs/output-contract.md`**: Argenta's transaction types and unique keys.
 - This plan disappears; the lasting facts are then in the files above.
 

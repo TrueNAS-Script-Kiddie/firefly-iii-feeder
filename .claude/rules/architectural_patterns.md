@@ -9,40 +9,46 @@ paths:
 
 ## 1. Linear Multi-Phase Pipeline
 
-[engine/process_csv.py](../../engine/process_csv.py) `main()` runs a strict
-ordered sequence. Each phase must succeed before the next begins:
+[engine/process_csv.py](../../engine/process_csv.py) `main()` runs one bank file through a strict
+ordered sequence; every way out goes through `finalize` (§2).
 
-1. **Load** — encoding/delimiter auto-detection (`load_csv_rows` in
-   [engine/core/csv_runtime.py](../../engine/core/csv_runtime.py)).
-2. **Autodetect bank** — match CSV headers against all loaded YAML configs
-   (`autodetect_bank` in [engine/core/csv_validation.py](../../engine/core/csv_validation.py)).
-3. **Validate & map** — remap CSV columns to internal names, apply `filter` /
-   `filter_regex` (dropped rows are counted and logged per reason), then `regex`
-   validation (`validate_and_prepare`). A row with a failing cell is marked, not
-   fatal: it goes to normalize-failed in the loop. Only all rows failing, or a
-   file mixing several `partition_by` values, rejects the file (exit 65). All
-   rows filtered is `all_filtered`: nothing to do, exit 0.
-4. **Resolve the account's row-state path** — from `duplicate_key.partition_by`.
-5. **Load row state** — per-account persistent CSV
-   (`load_row_state` in [engine/core/row_state.py](../../engine/core/row_state.py)).
-6. **Per-row loop** — `extract_duplicate_key` → `classify_duplicate` → bank's
-   `normalize_row` → write temp output.
-7. **Outcome classification** — `success` / `partial` / `all_failed` /
-   `all_full_duplicates` / `all_filtered` / `structure_failed` / `error`.
-8. **Finalize** — single exit path for the output move, row-state commit, archiving the original, alert
-   (`finalize` in [engine/core/completion.py](../../engine/core/completion.py)).
+```mermaid
+flowchart TD
+    L[Load CSV<br/>encoding + delimiter detection] --> E{empty, or no bank<br/>config matches the header?}
+    E -->|yes| R65[structure_failed, 65]
+    E -->|no| V[Validate, filter, map columns]
+    V --> A{rows left after filtering,<br/>and every one invalid?}
+    A -->|yes| R65
+    A -->|no| P{exactly one known<br/>partition_by value?}
+    P -->|no| R65
+    P -->|yes| N[Name outputs:<br/>bank, account, period]
+    N --> AF{every row filtered out?}
+    AF -->|yes| F0[all_filtered, 0]
+    AF -->|no| S[Load the account's row state]
+    S --> LOOP[Per row: duplicate key → classify → normalize_row]
+    LOOP --> O[success / partial / all_failed /<br/>all_full_duplicates]
+    R65 --> FIN[finalize]
+    F0 --> FIN
+    O --> FIN
+```
+
+| Step | Where |
+|---|---|
+| Load | `load_csv_rows` in [engine/core/csv_runtime.py](../../engine/core/csv_runtime.py) |
+| Bank | `autodetect_bank` in [engine/core/csv_validation.py](../../engine/core/csv_validation.py): every required column of exactly one config present |
+| Validate | `validate_and_prepare`: `filter` / `filter_regex` drop a row (counted per reason in the log); a failing `regex` marks it, and the loop sends it to normalize-failed |
+| Name outputs | `describe_output`, `archive_paths` (§10) |
+| Row state | `load_row_state` in [engine/core/row_state.py](../../engine/core/row_state.py) (§7) |
+| Per row | `extract_duplicate_key` (no key → duplicate-failed), `classify_duplicate`, the bank's `normalize_row` (exception → normalize-failed), write temp output |
+
+An exception anywhere is `error`, exit 99.
 
 ## 2. Single Exit Path (`completion.finalize`)
 
-`finalize()` is the **only** place that calls `sys.exit()` (apart from the
-argument check at the top of `main()`). Every code path
-(normal, error, structure failure, row-level failure) calls it, guaranteeing
-that the output move, row-state commit, archiving the original, writer cleanup, backup
-rotation, temp cleanup, and the failure alert always happen together. Outcomes map
-1:1 to exit codes and destinations: a finished outcome archives the original in
-`archive/originals/`, any other in `archive/unprocessed/`
-([docs/archive-and-reload.md](../../docs/archive-and-reload.md)). See the
-step-numbered blocks inside `finalize`.
+`finalize()` is the **only** place that calls `sys.exit()` (apart from the argument check at the
+top of `main()`). Every code path calls it, so the output move, row-state commit, archiving of the
+original, cleanup and the failure alert always happen together. Order and criticality: §8; where
+the original goes: [docs/archive-and-reload.md](../../docs/archive-and-reload.md).
 
 ## 3. Configuration-Driven Bank Support
 
@@ -109,62 +115,75 @@ value, else the bank name; the same as the first part of `row_key`), with
 `duplicate_key`, `firefly_id` and the `columns.required` values of every bank row
 the feeder knows.
 
-- **The normalizer** loads it as a `defaultdict[str, list[dict]]` at the start of
-  each file. A row enters it only after `normalize_row` succeeded, so failed rows
-  are retried when their CSV is processed again. New rows are appended to the
-  in-memory dict during the loop, so intra-batch duplicates are caught too;
-  `finalize` commits the new rows (`firefly_id` empty) only for `success` /
-  `partial`.
-- **The importer** (`record_import`, per file, before the file moves) fills
-  `firefly_id`: the Firefly transaction the row created, or the transfer it
-  claimed, or the one Firefly named as duplicate. A row Firefly refused is removed
-  again, so the next export holding it retries it. A row whose `firefly_id` is set
-  is never sent again.
-- **Transfer sides**: a transfer's side is used when a row of that account has its
-  id as `firefly_id` (`load_transfer_pool`), so a side is claimed at most once ever,
-  across runs (§13).
+```mermaid
+stateDiagram-v2
+    [*] --> Unknown
+    Unknown --> Unknown: normalize_row fails
+    Unknown --> Waiting: normalized<br/>(firefly_id empty)
+    Waiting --> InFirefly: importer: created, claimed,<br/>or Firefly's duplicate
+    Waiting --> Unknown: Firefly refused:<br/>row removed
+    InFirefly --> InFirefly: same row again:<br/>identical, skipped
+    InFirefly --> InFirefly: other values:<br/>conflict, duplicate-failed
+```
 
-`classify_duplicate()` returns:
-- `new` — key not seen.
-- `identical` — key seen, all required fields match → silently skip.
-- `conflict` — key seen, required fields differ → write to duplicate-failed.
+Unknown = not in the file; Waiting = recorded, its output waits in `data/normalized/`.
 
-When the config's required columns change, the next commit rewrites the state with
-the new columns (logged): a removed column is dropped, an added one is
-`<not recorded>` (`NOT_RECORDED`) for the old rows and skipped when comparing them,
-so no re-import is needed.
+- **The normalizer** loads the state at the start of each file and classifies each row
+  (`classify_duplicate`): `new` (key not seen), `identical` (all required fields match → skipped,
+  also while Waiting), `conflict` (fields differ → duplicate-failed, state unchanged). Rows enter
+  only after `normalize_row` succeeded, so a failed row is retried when its CSV comes again; they
+  are added to the in-memory state during the loop, so duplicates within one file are caught too.
+  `finalize` commits them only for `success` / `partial`.
+- **The importer** (`record_import`, per file, before the file moves) fills `firefly_id`, or
+  removes a row Firefly refused so the next export holding it retries it. A row whose `firefly_id`
+  is set is never sent again. Transfer sides used by a recorded row are never claimed again (§13).
+- **Changed `columns.required`**: the next commit rewrites the state with the new columns
+  (logged): a removed column is dropped, an added one is `<not recorded>` (`NOT_RECORDED`) for the
+  old rows and skipped when comparing them, so no re-import is needed.
 
 Commit (`finalize` step 3): the updated state is prepared in `data/temp/`
-(`create_updated_row_state`), replaces the live file atomically (temp file +
-`os.replace`, `copy_atomically`), then a copy goes to `backups/<run>-<account>.csv`
-(`rotate_backups`, per account: at most `MAX_BACKUPS=50`, none older than
-`MAX_BACKUP_AGE_DAYS=365`, newest always kept). The importer's updates replace the
-file the same way, without a backup.
+(`create_updated_row_state`), replaces the live file atomically (temp file + `os.replace`,
+`copy_atomically`), then a copy goes to `backups/<run>-<account>.csv` (`rotate_backups`, per
+account: at most `MAX_BACKUPS=50`, none older than `MAX_BACKUP_AGE_DAYS=365`, newest always kept).
+The importer replaces the file the same way, without a backup.
 
-## 8. Tiered Error Criticality and Finalize Order
+## 8. Finalize Order and Tiered Error Criticality
 
-`finalize()` in [engine/core/completion.py](../../engine/core/completion.py) runs:
-1. prepare the updated row state in `data/temp/` (critical, 97);
-2. move the normalized output to `data/normalized/` (critical, 92);
-3. replace the live row state, then back it up (critical, 93; backup not critical);
-4. archive the original (critical, 94), last;
-5. remove a finished original's copies from `archive/unprocessed/`; rotate backups;
-   clean `data/temp/` (all not critical).
+`finalize()` in [engine/core/completion.py](../../engine/core/completion.py) first renames the log
+`<run>.log` to its final name and closes the writers, then:
 
-Until step 4 the original stays in `data/incoming/`, so a run interrupted hard
-(reboot, kill) is simply redone by the next one: after step 2 the output is made
-twice and the importer skips the rows already recorded; after step 3 every row is
-`identical` and the original is archived.
+```mermaid
+flowchart TD
+    S1[1. Prepare updated row state<br/>in data/temp/] --> S2[2. Move output to<br/>data/normalized/]
+    S2 --> S3[3. Replace live row state,<br/>then back it up]
+    S3 --> S4[4. Archive the original]
+    S4 --> S5[5. Remove its copies from unprocessed/,<br/>rotate backups, clean data/temp/]
+    S5 --> X[Log, alert on failure, exit]
+    S1 -.->|fails| E97[97]
+    S2 -.->|fails| E92[92]
+    S3 -.->|fails| E93[93: output taken back<br/>out of data/normalized/]
+    S4 -.->|fails| E94[94: rows already recorded]
+    E97 --> U[original to archive/unprocessed/,<br/>alert, exit]
+    E92 --> U
+    E93 --> U
+    E94 --> U
+```
 
-- **Non-critical** (wrap in try/except, log, continue): removing a finished
-  original's copies from `archive/unprocessed/`, backup and rotation, temp cleanup,
-  logging itself.
-- **Critical** (compensate, alert, exit): the original goes to
-  `archive/unprocessed/`, so it is not retried every minute and can be dropped in
-  again. At 93 the output is also taken out of `data/normalized/` again (the
-  importer runs only after every bank file, so it has not seen it). At 94 the rows
-  are already recorded; dropped in again, the original is `identical` and archived.
+- **Critical** (steps 1–4): compensate, alert, exit. The original goes to `archive/unprocessed/`,
+  so it is not retried every minute and can be dropped in again. At 93 the importer has not seen
+  the output yet: it runs only after every bank file. At 94, dropped in again, every row is
+  `identical` and the original is archived.
+- **Non-critical** (step 5, the backup copy, logging): try/except, log, continue.
 - **Catastrophic** (exit 99): unhandled exception anywhere in the pipeline.
+
+Until step 4 the original stays in `data/incoming/`, so a run interrupted hard (reboot, kill) is
+redone by the next one:
+
+| Interrupted | Next run |
+|---|---|
+| before step 2 | everything again, nothing twice |
+| after step 2 | the output exists twice; the importer sends each row once (the second copy finds its `firefly_id`) |
+| after step 3 | every row `identical`; the original is archived |
 
 ## 9. Context Dict as Pipeline State
 
@@ -176,58 +195,54 @@ keeping the pipeline callable as a unit — see `main()` in
 
 ## 10. Content-Describing File Names
 
-Every file of one bank file in `data/` — normalized output, failed rows, logs,
-import outputs — is named `<base>-<stage>`, with
-`<base>` = `<run>-<bank>-<account>-<first>_<last>` (format in AGENTS.md, Key
-Directories). All files of one bank file sort together, and a name says what is
-in it; this gives a complete audit trail without a database.
+Every file of one bank file in `data/` — normalized output, failed rows, logs, import outputs —
+is named `<base>-<stage>` (format: AGENTS.md "Key Directories"). All files of one bank file sort
+together, and a name says what is in it; this gives a complete audit trail without a database.
 
-- **Unique by construction**: `<run>` = start of the cron run
-  (`YYYYMMDD-HHMMSS`, `RUN_TS_FORMAT` in
-  [engine/core/row_state.py](../../engine/core/row_state.py)) + the
-  file's number in that run, generated by
-  [firefly-iii-feeder.bash](../../firefly-iii-feeder.bash) with builtins. A run
-  starting in a second already used by an earlier run leaves the work to the
-  next minute.
+- **Unique by construction**: `<run>` = start of the cron run (`YYYYMMDD-HHMMSS`, parsed back as
+  `RUN_TS_FORMAT` in [engine/core/row_state.py](../../engine/core/row_state.py)) + the file's
+  number in that run, generated by [firefly-iii-feeder.bash](../../firefly-iii-feeder.bash) with
+  builtins. A run starting in a second already used by an earlier run leaves the work to the next
+  minute.
 - **Python names, bash only numbers**: `build_paths` in
   [engine/core/csv_runtime.py](../../engine/core/csv_runtime.py) starts with
-  `<run>-unknown-<source name>`; once bank, account and period are known
-  (before the row loop) `process_csv` sets the final names, and `finalize`
-  renames the log `<run>.log` that bash created.
-- **The importer** derives its names (`-imported`, `-import.log`,
-  `-import-failed`) from the normalized file, so they follow automatically.
-- **The archived original** keeps the run id of its first arrival:
-  `archive/originals/<bank>/<account>/<run>-<first>_<last>-<sha8>.<ext>` or
-  `archive/unprocessed/<run>-<source name>`; a source name that already starts
-  with a run id (a copy from the archive) keeps it (`ARRIVAL_RUN_ID`, in
-  `csv_runtime` and in bash). So a reload processes the originals in the order
-  they first arrived.
+  `<run>-unknown-<source name>`; once bank, account and period are known (before the row loop)
+  `process_csv` sets the final names, and `finalize` renames the log `<run>.log` that bash created.
+  The source name is on the log's first line.
+- **The importer** derives its names (`-imported`, `-import.log`, `-import-failed`) from the
+  normalized file, so they follow automatically.
+- **The archived original** keeps the run id of its first arrival (`ARRIVAL_RUN_ID`, in
+  `csv_runtime` and in bash), so a reload processes the originals in the order they first arrived.
+  Names: [docs/archive-and-reload.md](../../docs/archive-and-reload.md).
 
 ## 11. Cron-Safe Orchestration
 
 [firefly-iii-feeder.bash](../../firefly-iii-feeder.bash) guards unattended execution:
 
+- **Idle runs** exit first, with builtins only (AGENTS.md "Idle cost"); every other step comes
+  after that exit.
 - Sets `PYTHONPATH` and `cd`s into `BASE_DIR` (cron has no defaults).
-- Exclusive `flock` on `.process.lock` for the whole run (normalizer and
-  importer); a second instance exits at once, and the kernel drops the lock
-  when the process dies, so a crash or reboot cannot leave a stale lock.
-- **Upload check** — skip a file until its `ctime` is ≥ 30 s old (Explorer and
-  `cp -p` keep an old mtime, but every write bumps ctime) and its last byte is a
-  newline; after 10 min process anyway so a broken file gets reported.
-- **Idle runs** exit before the lock when `incoming/` and `normalized/` hold no
-  CSV and neither `firefly-recalculate.flag` nor `archive-push-pending.flag` is
-  pending: builtins only — no subshell, no external command, no Python, no write
-  (hard rule, see AGENTS.md "Idle cost"). Every CSV glob skips Excel's `~$` lock
-  files.
-- Exit codes `0/65/75/99` are "Python handled it"; anything else triggers a
-  fallback move of the incoming file to `archive/unprocessed/` (`<run>-<source
-  name>`), unless that folder already holds its content.
-- **Archive to git** after the importer, still under the lock, in every run with
-  work: `git add -A` in `archive/`, a commit when anything changed, a push. A
-  failed push sets `archive-push-pending.flag`, alerts once, and every next run
-  pushes again.
-- Runs every minute; alerts go to stderr, which the TrueNAS cron job emails.
-  Success is silent.
+- Exclusive `flock` on `.process.lock` for the whole run (normalizer, importer, archive commit);
+  a second instance exits at once, and the kernel drops the lock when the process dies, so a crash
+  or reboot cannot leave a stale lock. `start-over.bash` takes the same lock.
+- **Upload check** — skip a file until its `ctime` is ≥ 30 s old (`UPLOAD_SETTLE_SECONDS`;
+  Explorer and `cp -p` keep an old mtime, but every write bumps ctime) and its last byte is a
+  newline; after 10 min process anyway, so a broken file gets reported.
+- Exit codes `0/65/75/99` are "Python handled it"; anything else triggers a fallback move of the
+  incoming file to `archive/unprocessed/`, unless that folder already holds its content.
+- After every bank file, the importer (§13); then the archive is committed and pushed
+  ([docs/archive-and-reload.md](../../docs/archive-and-reload.md), rule 7).
+- Alerts go to stderr, which the TrueNAS cron job emails. Success is silent.
+
+State that must survive a run is a flag file in `data/`:
+
+| Flag | Set by | Removed when | While it exists |
+|---|---|---|---|
+| `firefly-recalculate.flag` | importer, before the first batch row | `batch/finish` and the running balances both succeeded | counts as work: every minute retries the follow-up |
+| `firefly-follow-up-alerted.flag` | the first failed follow-up | together with the flag above | the retries stay silent |
+| `firefly-import-blocked.flag` | Firefly unreachable or token refused (exit 69) | a run that is not blocked | one alert per outage |
+| `firefly-import-crashed.flag` | unexpected exception in the importer (exit 70) | a run that does not crash | one alert, with the traceback |
+| `archive-push-pending.flag` | bash or `start-over.bash`, push failed | a push succeeded | counts as work: every minute pushes again; one alert |
 
 ## 12. Naming Conventions
 
@@ -240,54 +255,70 @@ except common ones (IBAN, BIC, CSV).
 
 ## 13. Firefly III Import Stage
 
-[engine/firefly/import_normalized.py](../../engine/firefly/import_normalized.py)
-runs after the normalizer loop and turns every row in `data/normalized/` into
-one `POST /api/v1/transactions`.
+[engine/firefly/import_normalized.py](../../engine/firefly/import_normalized.py) runs after every
+bank file of the run and turns each row in `data/normalized/` into one `POST /api/v1/transactions`
+with `error_if_duplicate_hash`: Firefly answers a row it already stored with 422 "Duplicate of
+transaction #id", counted as already present. Firefly gotchas: AGENTS.md "Firefly III Import".
 
-- **Idempotent** — `error_if_duplicate_hash` makes a re-import of the same
-  row "already present", as long as every field sent is the same: the hash
-  covers them all (needs Firefly ≥ 6.7.0: older versions hashed the batch
-  flag, so the same row in per-row and batch mode was stored twice). Firefly's check includes deleted transactions:
-  purge (`DELETE /api/v1/data/purge`) after deleting, before re-importing.
-- **Firefly state read per run** — asset accounts by IBAN and account number,
-  currencies (a disabled one a row uses is enabled), existing transfers
-  for matching. Nothing about Firefly is configured in this repo.
-- **Own transfers: match or create** — both accounts' CSVs carry the same
-  movement; the first side creates the transfer, the other claims it
-  (`claim_transfer`: same accounts, amount, ±`TRANSFER_MATCH_DAYS`, one claim
-  per side, ever: the row state records which row used which transfer, §7).
-  Robust to file order and unequal history coverage. The claiming side's own
-  fields (`external_id`, `row_key`, notes) are not added to the transfer.
-- **Run-level vs row-level failure** — `FireflyAuthError` /
-  `FireflyUnavailableError` ([engine/firefly/api.py](../../engine/firefly/api.py))
-  stop the run and leave files in place, alerted once per outage via
-  `data/firefly-import-blocked.flag`. A 5xx on a POST is first checked with
-  `GET about` (`firefly_answers`): if Firefly answers, the row is the problem and
-  fails like any other rejection, so it cannot block every run; the third such row
-  in a row (`ROW_5XX_OUTAGE_STREAK`, counted across the run's files) is an outage
-  after all. Any other
-  rejection fails only that row
-  (to `data/failed-rows/<base>-import-failed.csv`) and the file moves to
-  `data/imported/` as `<base>-imported-partial.csv`. A file the normalizer
-  already marked `-normalized-partial` also ends up `-imported-partial`. A failed
-  row leaves the row state again: the next export holding it retries it.
-  An unexpected exception (a bug) also leaves the files in place: its traceback
-  is alerted once via `data/firefly-import-crashed.flag` (exit 70).
-- **Mode per run** — per row for recent data, batch (`batch_submission`) when
-  more than `BATCH_OLD_ROWS_THRESHOLD` rows are older than
-  `BATCH_OLD_ROW_AGE_DAYS`, relative to the day of the run. Per row, Firefly
-  recalculates every later balance of the account, so `import_file` sends each
-  file oldest first (failures keep file order), and old rows cost seconds each;
-  batch costs a fixed follow-up instead (rules via `batch/finish`, balances via
-  the root helper `deploy/firefly-refresh-running-balance.bash` through a sudo
-  rule: Firefly has no API for it). `firefly-recalculate.flag` is set before the
-  first batch row and removed only after the follow-up succeeded; a failure
-  alerts once (`firefly-follow-up-alerted.flag`) and every next run retries
-  silently, also when there are no new files. A slow
-  `batch/finish` is not an outage (own long timeout, no block flag).
-- **Dry run** — `--dry-run` runs the same decisions (including simulated
-  transfer claims) without sending or moving anything.
-- **Cash withdrawals** — the bank module marks them with `is_cash_withdrawal`
-  (`1`); the importer books a marked row without counterparty on Firefly's Cash
-  account (`build_split`). A new bank only has to set the same mark; unmarked
-  rows without counterparty get `(onbekend)`.
+- **Firefly state read per run** — asset accounts by IBAN and account number, currencies,
+  existing transfers. Nothing about Firefly is configured in this repo.
+- **Row → split** (`build_split`; field table: [docs/output-contract.md](../../docs/output-contract.md),
+  "In Firefly"):
+  - The sign of `amount` decides withdrawal / deposit. The own account is `asset_account_iban`,
+    else `asset_account_number`, matched against both fields of every Firefly asset account. No
+    match, an identifier of two accounts, or a counterparty that is the row's own account fails
+    the row.
+  - A counterparty account without an IBAN goes to `source_number` / `destination_number`: Firefly
+    validates `*_iban` as an IBAN, `*_number` is free text.
+  - A currency disabled in Firefly is enabled (logged); one Firefly doesn't know fails the row.
+  - No counterparty → `(onbekend)`, or Firefly's Cash account for a row the bank module marked
+    `is_cash_withdrawal` (`1`); a new bank only has to set that mark.
+- **Own transfers: match or create** (`claim_transfer`). A row whose counterparty is an own
+  account first claims an existing transfer between the same accounts, same amount, within
+  `TRANSFER_MATCH_DAYS`, whose side (out or in) is still free; else it creates one. Order and
+  history coverage of the accounts' CSVs don't matter. The transfer carries only the first side's
+  fields; the claiming side's `external_id`, `row_key` and notes stay in its `data/imported/` file.
+
+  ```mermaid
+  sequenceDiagram
+      participant A as row of account A
+      participant I as importer
+      participant F as Firefly
+      participant S as row state
+      A->>I: counterparty: own account B
+      I->>F: transfer A→B, same amount, ±7 days,<br/>out side free?
+      F-->>I: none
+      I->>F: POST transfer
+      F-->>I: id 42
+      I->>S: A's row: firefly_id 42
+      Note over A,S: later file or later run
+      I->>F: B's row: transfer A→B,<br/>in side free?
+      F-->>I: 42
+      I->>S: B's row: firefly_id 42
+  ```
+
+  A side is used when a row of that account has the transfer as `firefly_id`
+  (`load_transfer_pool`), so each side is claimed once, ever.
+- **Mode per run**, by `BATCH_OLD_ROWS_THRESHOLD` / `BATCH_OLD_ROW_AGE_DAYS` (more than 20 rows
+  older than about 6 months, relative to the day of the run):
+  - **Per row** (default): Firefly applies rules and recalculates every later balance of the
+    account at once: ~0.3 s for a recent row, ~3 s for a 2015 row. So `import_file` sends each file
+    oldest first (banks export newest first; newest first roughly doubles the time of a few
+    hundred rows). Failures are reported in file order.
+  - **Batch** (history imports): ~0.2 s per row with `batch_submission`, then a follow-up at the
+    end of the run: `batch/finish` applies the rules (own long timeout: slow is not an outage),
+    and the root helper (AGENTS.md "Root helper") recalculates all running balances, ~1 min at
+    14,500 transactions; Firefly has no API for that. `firefly-recalculate.flag` (§11) keeps the
+    follow-up pending until both succeeded, also when there are no new files.
+- **Run-level vs row-level failure** — Firefly unreachable or the token refused
+  (`FireflyUnavailableError` / `FireflyAuthError`,
+  [engine/firefly/api.py](../../engine/firefly/api.py)) stops the run, exit 69; files stay in
+  place. A 5xx on a POST is first checked with `GET about` (`firefly_answers`): if Firefly answers,
+  the row is the problem and fails like any rejection, so one row cannot block every run; the third
+  such row in a row (`ROW_5XX_OUTAGE_STREAK`, counted across the run's files) is an outage after
+  all. A rejected row goes to `data/failed-rows/<base>-import-failed.csv` and leaves the row state
+  (§7); its file moves to `data/imported/` as `-imported-partial`, as does a file the normalizer
+  already marked `-normalized-partial`. Any other exception (a bug) leaves the files in place,
+  exit 70.
+- **Dry run** — `--dry-run` runs the same decisions (including simulated transfer claims) without
+  sending, moving or recording anything.

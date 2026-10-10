@@ -1,7 +1,8 @@
 #!/bin/bash
 
-# Start over (AGENTS.md, hard rule "Rebuild from scratch"): wipe what the feeder put into Firefly,
-# move data/ aside and put every archived original back into data/incoming/. The cron job does the
+# Start over (AGENTS.md, hard rule "Rebuild from scratch"): wipe every transaction and every
+# expense/revenue account in Firefly (also those entered by hand), move data/ aside and put every
+# archived original back into data/incoming/. The cron job does the
 # rest, oldest arrival first. By hand, as the owner of this folder (the cron user):
 #   sudo -H -u <cron user> bash <app-ds>/firefly-iii-feeder/start-over.bash
 
@@ -70,8 +71,8 @@ done
 
 cat <<EOF
 Start over:
-  1. wipe every transaction in Firefly at ${FIREFLY_URL}, and the expense and
-     revenue accounts they created (asset accounts, rules and categories stay)
+  1. wipe every transaction and every expense and revenue account in Firefly at
+     ${FIREFLY_URL}, also those entered by hand (asset accounts, rules and categories stay)
   2. move data/ to data-before-start-over/ (the one there now is deleted)
   3. load back ${#ORIGINALS[@]} files from archive/originals/ and ${#UNPROCESSED[@]} from archive/unprocessed/
 EOF

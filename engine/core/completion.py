@@ -1,11 +1,12 @@
 """
 Completion module:
-Handles ALL end-of-processing operations:
+Handles ALL end-of-processing operations, in this order:
 - Closing open file handles
-- Row-state update (prepared in data/temp/, then atomic replace) + backup + rotation
+- Preparing the updated row state in data/temp/
 - Moving normalized output
+- Replacing the live row state (atomic) + backup
 - Archiving the original (archive/originals/ or archive/unprocessed/), last
-- Cleaning up the temp directory
+- Backup rotation, cleaning up the temp directory
 - Final log + alert (on failure) + exit
 
 This module is the single exit path for the entire processing flow.

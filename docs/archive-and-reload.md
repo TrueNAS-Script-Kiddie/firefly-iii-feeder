@@ -120,15 +120,24 @@ same export arrives again.
 
 ```mermaid
 flowchart TD
-    R[row from normalized/] --> T{counterparty is an<br/>own account?}
-    T -->|yes| C{transfer already in Firefly?<br/>same accounts, amount, ±7 days}
+    R[row from normalized/] --> K{firefly_id set<br/>in the row state?}
+    K -->|yes| SK[skipped: already in Firefly]
+    K -->|no| T{counterparty is an<br/>own account?}
+    T -->|yes| C{transfer in Firefly with this side free?<br/>same accounts, amount, ±7 days}
     C -->|yes| CL[claimed: nothing new]
     C -->|no| P
     T -->|no| P[POST to Firefly]
     P -->|200| NEW[new transaction]
     P -->|422 duplicate hash| AP[already present: nothing new]
-    P -->|other error| IF["failed-rows/…-import-failed.csv<br/>removed from the row state"]
+    P -->|"refused, or a 5xx<br/>while Firefly answers"| IF["failed-rows/…-import-failed.csv"]
+    CL --> ID[its Firefly id goes<br/>into the row state]
+    NEW --> ID
+    AP --> ID
+    IF --> RM[removed from the row state]
 ```
+
+"Refused" includes what fails before the POST: no own account with that IBAN, a currency Firefly
+doesn't know, a counterparty that is the row's own account.
 
 ### Overlapping exports
 
@@ -137,7 +146,7 @@ Three exports of one account, requested and dropped in this order:
 ```mermaid
 sequenceDiagram
     participant B as incoming/
-    participant N as normalizer + row state
+    participant N as normalizer, row state, importer
     participant A as archive
     participant F as Firefly
     B->>N: A: 2015–2024 (1000 rows)
@@ -246,11 +255,11 @@ sequenceDiagram
    and run it again.
 
 Files waiting in `normalized/` are dropped: their originals are in the archive. A rejected file
-that still fails alerts again and stays in `unprocessed/`. How long the reload takes: AGENTS.md "Start Over".
+that still fails alerts again and stays in `unprocessed/`. The reload takes about an hour for
+~14,000 rows (batch mode plus the follow-up).
 
 **Not restored** by a start-over:
-- `config/app.env` (URL, token) and the one-time setup: Firefly's configuration, the root helper
-  and its sudo rule, the cron job, the archive repo (below).
+- `config/app.env` and the rest of the one-time setup (AGENTS.md "Setup").
 - Own (asset) accounts: they are not wiped, and not in the archive either; the importer needs them
   with their IBANs. A new Firefly needs them created by hand first.
 - Classification: rules, categories and tags stay in Firefly but no longer hold any transaction.
@@ -261,7 +270,7 @@ that still fails alerts again and stays in `unprocessed/`. How long the reload t
 
 ## Setup (by hand, once per server)
 
-Every command that writes in the feeder folder or the cron user's home runs as the cron user
+The archive repo; the rest of the one-time setup is in AGENTS.md "Setup". Every command that writes in the feeder folder or the cron user's home runs as the cron user
 (`sudo -H -u <cron user> …`; without `-H` git looks for its config in `/root`), so the key,
 `archive/` and its `.git/` belong to that user.
 
@@ -282,27 +291,22 @@ Every command that writes in the feeder folder or the cron user's home runs as t
 
 ## Restore on a new server
 
-1. Firefly III and its one-time setup (AGENTS.md "Firefly III Import", gotchas; "Root helper"),
-   the own accounts with their IBANs, and the cron job.
-2. The feeder code in its folder, owned by the cron user, with `firefly-iii-feeder.bash`
-   executable: the cron job runs it directly (SFTP sets no execute bit, a git clone does).
-3. Setup steps 1–3 above; then, instead of `git init`, clone the archive and give the clone the
+1. AGENTS.md "Setup", every step but the archive repo: Firefly, the own accounts with their IBANs,
+   `config/app.env` with a new token, the feeder folder, the root helper, the cron job.
+2. Setup steps 1–3 above; then, instead of `git init`, clone the archive and give the clone the
    same `.git/config` entries as step 4:
 
    ```bash
    git -c core.sshCommand='ssh -F <that config>' clone git@forgejo:<owner>/finance-data.git archive
    ```
 
-4. `config/app.env` with `FIREFLY_URL` and a new `FIREFLY_TOKEN`, mode 600.
-5. `start-over.bash`.
+3. `start-over.bash`.
 
 ## Known limitations
 
 - **Forgejo is not replicated to truenas-backup** (still to do in sync-truenas-servers): the
   archive and its Forgejo remote are on one machine, covered only by the hourly snapshots of
   `app-ds`.
-- **Own accounts are not in the archive**: a new Firefly needs them created by hand before a
-  reload.
 - **`bank-csv-originals/`** still holds exports the feeder cannot read yet (Argenta: xlsx, pdf);
   they enter the archive once it can.
 
