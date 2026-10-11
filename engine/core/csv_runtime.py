@@ -212,7 +212,8 @@ def load_all_bank_configs(config_dir: str) -> dict[str, dict[str, Any]]:
     configs: dict[str, dict[str, Any]] = {}
 
     for filename in os.listdir(config_dir):
-        if not filename.endswith(".yaml"):
+        # A template (accounts.example.yaml) is no bank
+        if not filename.endswith(".yaml") or filename.endswith(".example.yaml"):
             continue
 
         full_path = os.path.join(config_dir, filename)

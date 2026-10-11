@@ -2,9 +2,12 @@
 
 # Start over (AGENTS.md, hard rule "Rebuild from scratch"): wipe every transaction and every
 # expense/revenue account in Firefly (also those entered by hand), move data/ aside and put every
-# archived original back into data/incoming/. The cron job does the
-# rest, oldest arrival first. By hand, as the owner of this folder (the cron user):
-#   sudo -H -u <cron user> bash <app-ds>/firefly-iii-feeder/start-over.bash
+# archived original back into data/incoming/. The cron job does the rest, oldest arrival first;
+# its first run applies archive/accounts.yaml before importing. By hand, as the owner of this
+# folder (the cron user):
+#   sudo -H -u <cron user> bash <app-ds>/firefly-iii-feeder/start-over.bash [--wipe-accounts]
+# --wipe-accounts also deletes every own (asset) account, so the first run creates them all again
+# from archive/accounts.yaml.
 
 shopt -s nullglob
 
@@ -15,6 +18,7 @@ BASE_DIR="${PWD}"
 DATA_DIR="${BASE_DIR}/data"
 PREVIOUS_DATA_DIR="${BASE_DIR}/data-before-start-over"
 ARCHIVE_DIR="${BASE_DIR}/archive"
+ACCOUNTS_FILE="${ARCHIVE_DIR}/accounts.yaml"
 APP_ENV="${BASE_DIR}/config/app.env"
 LOCKFILE_PATH="${BASE_DIR}/.process.lock"
 # As in firefly-iii-feeder.bash: while it exists, every cron run pushes the archive again
@@ -27,10 +31,17 @@ stop() {
 	exit 1
 }
 
+WIPE_ACCOUNTS=0
+case "$*" in
+"") ;;
+--wipe-accounts) WIPE_ACCOUNTS=1 ;;
+*) stop "unknown argument: $*" "usage: start-over.bash [--wipe-accounts]" ;;
+esac
+
 # A file root creates in data/ or archive/ breaks the cron job, which runs as the folder's owner
 if ((EUID != $(stat -c %u "${BASE_DIR}"))); then
 	stop "run this as the owner of ${BASE_DIR}:" \
-		"  sudo -H -u $(stat -c %U "${BASE_DIR}") bash ${BASE_DIR}/start-over.bash"
+		"  sudo -H -u $(stat -c %U "${BASE_DIR}") bash ${BASE_DIR}/start-over.bash $*"
 fi
 
 # The cron job's lock: a running run finishes first, and none starts until this script ends
@@ -68,11 +79,27 @@ for path in "${archived[@]}"; do
 done
 # Wiping with nothing to load back would leave Firefly empty
 ((${#ORIGINALS[@]})) || stop "${ARCHIVE_DIR}/originals/ holds no files: nothing to load back."
+# Without the file nothing creates the own accounts again, and every row would fail
+if ((WIPE_ACCOUNTS)) && [[ ! -f "${ACCOUNTS_FILE}" ]]; then
+	stop "--wipe-accounts without ${ACCOUNTS_FILE}: nothing would create the own accounts again."
+fi
 
+if ((WIPE_ACCOUNTS)); then
+	wiped="every transaction, every expense and revenue account and every own (asset) account
+     in Firefly at ${FIREFLY_URL}, also those entered by hand. The own accounts go with their
+     opening balances, piggy banks and recurring transactions (rules and categories stay);
+     the first cron run creates them again from archive/accounts.yaml"
+elif [[ -f "${ACCOUNTS_FILE}" ]]; then
+	wiped="every transaction and every expense and revenue account in Firefly at
+     ${FIREFLY_URL}, also those entered by hand (own accounts, rules and categories stay;
+     the first cron run sets the own accounts to archive/accounts.yaml)"
+else
+	wiped="every transaction and every expense and revenue account in Firefly at
+     ${FIREFLY_URL}, also those entered by hand (own accounts, rules and categories stay)"
+fi
 cat <<EOF
 Start over:
-  1. wipe every transaction and every expense and revenue account in Firefly at
-     ${FIREFLY_URL}, also those entered by hand (asset accounts, rules and categories stay)
+  1. wipe ${wiped}
   2. move data/ to data-before-start-over/ (the one there now is deleted)
   3. load back ${#ORIGINALS[@]} files from archive/originals/ and ${#UNPROCESSED[@]} from archive/unprocessed/
 EOF
@@ -109,7 +136,9 @@ wipe_failed() {
 		"Firefly may be partly wiped; data/ is untouched. Fix it, then run start-over.bash again."
 }
 # destroy stops partway with a 504 after about a minute: repeat it until 204
-for objects in transactions expense_accounts revenue_accounts; do
+WIPE=(transactions expense_accounts revenue_accounts)
+((WIPE_ACCOUNTS)) && WIPE+=(asset_accounts)
+for objects in "${WIPE[@]}"; do
 	printf 'Wiping %s:' "${objects}"
 	while
 		code=$(firefly_delete "destroy?objects=${objects}")

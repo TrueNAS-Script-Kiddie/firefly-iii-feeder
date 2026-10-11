@@ -1,6 +1,7 @@
 # Plan 01 — Core, Fintro and Firefly setup
 
-Status: **in progress — steps 0 to 4 done; next: step 5.** To be carried out before
+Status: **in progress — steps 0 to 4 done; step 5 carried out and checked on the server, not
+committed yet (review); next: step 6.** To be carried out before
 [plan 02 (Argenta)](02-argenta.md).
 Nothing here is Argenta-specific, but plan 02 builds on it. Examples are made up (public
 repo); real rows stay in the terminal.
@@ -83,6 +84,49 @@ Done; their lasting facts are in AGENTS.md, architectural_patterns.md, the Fintr
 
 ### Step 5 — Own accounts via a file
 
+**Carried out** (not committed yet): `engine/firefly/accounts.py` (reading, checking, applying),
+the importer's `--accounts-only` / `--accounts`, `start-over.bash --wipe-accounts`, the template
+`config/accounts.example.yaml`. Regression test: Fintro 0 differences. Tested against a simulated
+Firefly (create, update, unlisted alert, corrections, dry run, invalid file) and `start-over.bash`
+in a throwaway copy with a stub `curl`. Server check done (below).
+
+As built, beyond the design below (for step 6 to document):
+
+- `load_all_bank_configs` skips `*.example.yaml`: the template sits in `config/`, where every
+  other `.yaml` is a bank config.
+- Two more fields: `notes` (Firefly's account notes) and `key`, required for an account with
+  neither `iban` nor `account_number` (a cash wallet) and refused otherwise. The key is kept as
+  the last line of the notes, `firefly-iii-feeder key: <key>`, and finds the account again, also
+  after a rename; an existing account without that line is found once by its name (Firefly
+  keeps asset account names unique), and the update adds the line. An unknown field is refused; an
+  `account_number` of only digits must be quoted (YAML drops leading zeros). Names and
+  identifiers are unique across the file.
+- The whole file is checked before Firefly is contacted: an invalid file sends nothing, also
+  with `--accounts-only`.
+- An opening balance of 0 is no opening balance (Firefly keeps none for 0).
+- On a difference the update sends every field of the account, not only the changed ones:
+  Firefly checks some only together (a credit card's payment date with its role).
+- Changes go to `data/logs/<time>-firefly-accounts.log`, written only when something changes;
+  each import log's first line says `accounts file: 1 accounts created, …` or
+  `nothing to change`. `--accounts-only` also prints them.
+- Unlisted own accounts: alert `FIREFLY OWN ACCOUNTS NOT IN THE ACCOUNTS FILE`, with name, IBAN,
+  account number and Firefly id.
+- `--accounts-only` leaves the flags alone (it is run by hand); exit 69 when blocked, 2 when the
+  file is missing. Without `--accounts`, a missing `archive/accounts.yaml` is fine for an import.
+- A correction: amount + → deposit from the counterparty, − → withdrawal to it; notes
+  `Correction from the accounts file`; Firefly's rules are applied to it, as to imported rows.
+
+Checked in Firefly's source (6.7.8), the two open questions of the design:
+
+- An own account whose IBAN is already on an expense or revenue account is refused (`UniqueIban`
+  allows an asset IBAN on no other asset, expense or revenue account). The refusal blocks the
+  import like any other; its alert says that `start-over.bash` removes those accounts before the
+  file is applied. The same holds for `account_number`.
+- `internal_reference_starts:correction|` works: the search parser treats `|` as a plain
+  character, and it is no wildcard in the SQL `LIKE` the operator becomes.
+
+Design:
+
 Now you create accounts by hand in the Firefly GUI. New: you describe them once in
 `archive/accounts.yaml`, and the feeder makes Firefly match it.
 
@@ -153,15 +197,6 @@ Now you create accounts by hand in the Firefly GUI. New: you describe them once 
 **Not in this public repo.** The repo gets a template `config/accounts.example.yaml` with all
 explanation and made-up accounts (English, like the rest of the repo). Your own file
 `archive/accounts.yaml` starts as a copy of it.
-
-Still to check during execution:
-
-- Does Firefly refuse an own account whose IBAN already exists as an expense/revenue account
-  (now so for the Argenta and Rabobank IBANs)? After a start-over it cannot happen: the wipe
-  removes expense/revenue accounts before the first run applies the file. Later, when a new
-  account is added to the file, it can.
-- Does the search operator `internal_reference_starts:` accept the prefix `correction|`? If not,
-  choose a prefix it accepts.
 
 Design of the template:
 
@@ -251,8 +286,9 @@ source code, so those names were not checked.
 "Debit" is not a kind of account but a card attached to a current account; in Firefly that card
 has no account of its own.
 
-Check: with `--accounts-only --dry-run` on a draft holding the current Fintro accounts as they are
-in Firefly, nothing is created or updated. Step 7 does the real test.
+Check (server, done): `--accounts-only --dry-run` on a draft holding every own account as it is
+in Firefly creates nothing and updates only what the draft deliberately changes (a role, notes,
+a key). Step 7 does the real test.
 
 ### Step 6 — Documentation
 
@@ -261,8 +297,12 @@ What step 5 leaves, in the structure of step 0:
 - **AGENTS.md**:
   - "Running": `--accounts-only`;
   - "Setup": step "Own (asset) accounts" becomes "write `archive/accounts.yaml`" (template
-    `config/accounts.example.yaml`).
-- **README.md**: the project tree (`config/accounts.example.yaml`).
+    `config/accounts.example.yaml`);
+  - "Key Directories": `engine/firefly/` gets `accounts`; `config/` the template (no bank
+    config); `data/logs/` the `<time>-firefly-accounts.log`;
+  - "Adding a New Bank" step 1: a `*.example.yaml` is never a bank;
+  - "Exit Codes", importer: `--accounts-only` gives 69 when blocked, 2 without a file.
+- **README.md**: the project tree (`config/accounts.example.yaml`, `engine/firefly/accounts`).
 - **architectural_patterns.md** §13: the accounts file is applied before the Firefly state is
   read; an invalid file blocks like an outage. §11: the blocked flag also covers that.
 - **docs/archive-and-reload.md**:

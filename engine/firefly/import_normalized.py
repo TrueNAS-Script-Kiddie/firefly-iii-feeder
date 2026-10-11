@@ -24,8 +24,13 @@ row used which transfer. Found -> already present; not found -> the row creates
 the transfer. Order and history coverage of the accounts' CSVs therefore don't
 matter.
 
+Own accounts: at the start of every run with files to import, archive/accounts.yaml (if it
+exists) is applied to Firefly first (engine/firefly/accounts.py). An invalid file, or an account
+Firefly refuses, blocks the run like an outage.
+
 Usage:
   PYTHONPATH=. python3 -m engine.firefly.import_normalized [--dry-run] [--show N] [csv ...]
+  PYTHONPATH=. python3 -m engine.firefly.import_normalized --accounts-only [--accounts <path>] [--dry-run]
 """
 
 import argparse
@@ -47,6 +52,14 @@ from typing import Any
 
 from engine.core.row_state import load_firefly_ids, record_import
 from engine.core.runtime import BASE_DIR, CONFIG, alert, log_event
+from engine.firefly.accounts import (
+    AccountsFileError,
+    Applied,
+    OwnAccount,
+    apply_accounts,
+    clean_identifier,
+    load_accounts_file,
+)
 from engine.firefly.api import FireflyAuthError, FireflyClient, FireflyUnavailableError
 
 DATA_DIR = os.path.join(BASE_DIR, "data")
@@ -55,6 +68,7 @@ IMPORTED_DIR = os.path.join(DATA_DIR, "imported")
 FAILED_DIR = os.path.join(DATA_DIR, "failed-rows")
 LOG_DIR = os.path.join(DATA_DIR, "logs")
 ROW_STATE_DIR = os.path.join(DATA_DIR, "row-state")
+ACCOUNTS_FILE = os.path.join(BASE_DIR, "archive", "accounts.yaml")
 BLOCKED_FLAG = os.path.join(DATA_DIR, "firefly-import-blocked.flag")
 # Set while batch-submitted transactions still need rules + running balances
 RECALCULATE_FLAG = os.path.join(DATA_DIR, "firefly-recalculate.flag")
@@ -97,11 +111,6 @@ RE_DUPLICATE = re.compile(r"Duplicate of transaction #(\d+)")
 TransferPool = dict[tuple[str, str, str], list[dict[str, Any]]]
 
 
-def clean_identifier(value: str | None) -> str:
-    """IBAN or account number without spaces, upper case."""
-    return (value or "").replace(" ", "").upper()
-
-
 def money(value: str) -> str:
     """Canonical amount for matching; Firefly returns amounts with many decimals."""
     return str(Decimal(value).copy_abs().quantize(Decimal("0.01")))
@@ -114,10 +123,10 @@ def money(value: str) -> str:
 Assets = dict[str, dict[str, str] | None]
 
 
-def load_asset_accounts(client: FireflyClient) -> Assets:
-    """Every Firefly asset account, findable by its IBAN and by its account number."""
+def index_asset_accounts(accounts: list[dict[str, Any]]) -> Assets:
+    """Firefly's asset accounts (as GET accounts gives them), findable by IBAN and by account number."""
     assets: Assets = {}
-    for account in client.get_all("accounts?type=asset"):
+    for account in accounts:
         attributes = account["attributes"]
         found = {"id": str(account["id"]), "name": attributes["name"]}
         for identifier in {clean_identifier(attributes.get(field)) for field in ("iban", "account_number")} - {""}:
@@ -567,10 +576,21 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--dry-run", action="store_true", help="build every request, send nothing, move nothing")
     parser.add_argument("--show", type=int, default=0, help="dry-run: print the first N request payloads per file")
+    parser.add_argument("--accounts-only", action="store_true", help="apply the accounts file, import nothing")
+    parser.add_argument("--accounts", default=ACCOUNTS_FILE, help=f"accounts file (default {ACCOUNTS_FILE})")
     parser.add_argument("files", nargs="*", help=f"default: every *.csv in {NORMALIZED_DIR}")
     args = parser.parse_args()
+    if args.accounts_only and args.files:
+        parser.error("--accounts-only imports no files")
+    # Only the default may be absent: then Firefly's accounts are used as they are
+    if args.accounts != ACCOUNTS_FILE and not os.path.isfile(args.accounts):
+        parser.error(f"no accounts file {args.accounts}")
+    if args.accounts_only and not os.path.isfile(args.accounts):
+        parser.error(f"no accounts file {args.accounts}: nothing to apply")
 
-    # A dry run is interactive: let a crash show its traceback
+    # A dry run and --accounts-only are interactive: let a crash show its traceback
+    if args.accounts_only:
+        return apply_accounts_only(args)
     if args.dry_run:
         return import_all(args)
     try:
@@ -592,6 +612,56 @@ def main() -> int:
     return exit_code
 
 
+def apply_accounts_file(
+    client: FireflyClient, path: str, accounts: list[OwnAccount], dry_run: bool, echo: bool
+) -> Applied:
+    """
+    Apply the accounts read from `path`; changes go to a log of their own (none in a dry run),
+    also printed with `echo` (never in cron: it mails any output). Every own account the file does
+    not list is alerted.
+    """
+    accounts_log = os.path.join(LOG_DIR, f"{datetime.now():%Y%m%d-%H%M%S}-firefly-accounts.log")
+
+    def log(message: str) -> None:
+        if echo:
+            print(f"  {message}")
+        if not dry_run:
+            log_event(accounts_log, message)
+
+    applied = apply_accounts(client, accounts, dry_run, log)
+    if applied.unlisted:
+        listed = "\n".join(
+            f"- '{a['attributes']['name']}' (IBAN {a['attributes'].get('iban') or '-'}, "
+            f"account number {a['attributes'].get('account_number') or '-'}, Firefly id {a['id']})"
+            for a in applied.unlisted
+        )
+        alert(
+            f"FIREFLY OWN ACCOUNTS NOT IN THE ACCOUNTS FILE: {len(applied.unlisted)}",
+            f"{listed}\n\nEvery own account belongs in {path}: add it there, or delete it in Firefly. "
+            "Alerted in every run that imports.",
+        )
+    return applied
+
+
+def apply_accounts_only(args: argparse.Namespace) -> int:
+    """--accounts-only: apply the file by hand; flags stay as the cron runs left them."""
+    try:
+        # Checked before Firefly is needed: a draft can be checked anywhere
+        accounts = load_accounts_file(args.accounts)
+        client = FireflyClient(CONFIG.get("FIREFLY_URL", ""), CONFIG.get("FIREFLY_TOKEN", ""))
+        if not args.dry_run:
+            os.makedirs(LOG_DIR, exist_ok=True)
+        applied = apply_accounts_file(client, args.accounts, accounts, args.dry_run, echo=True)
+    except AccountsFileError as exc:
+        print(f"BLOCKED: accounts file {args.accounts}: {exc}", file=sys.stderr)
+        return EXIT_UNAVAILABLE
+    except (FireflyAuthError, FireflyUnavailableError) as exc:
+        print(f"BLOCKED: {exc}", file=sys.stderr)
+        return EXIT_UNAVAILABLE
+    print(f"{'Dry run: ' if args.dry_run else ''}{args.accounts}: {applied.summary()}")
+    return EXIT_OK
+
+
 def import_all(args: argparse.Namespace) -> int:
     files = args.files or sorted(
         path
@@ -609,10 +679,20 @@ def import_all(args: argparse.Namespace) -> int:
 
     totals: collections.Counter = collections.Counter()
     try:
+        # Applied only by runs that import: an export needing a new account comes with it
+        accounts = load_accounts_file(args.accounts) if files and os.path.isfile(args.accounts) else None
         client = FireflyClient(CONFIG.get("FIREFLY_URL", ""), CONFIG.get("FIREFLY_TOKEN", ""))
         if files:
             started = time.monotonic()
-            assets = load_asset_accounts(client)
+            # Before the asset accounts are read
+            accounts_note = "no accounts file"
+            if accounts is not None:
+                applied = apply_accounts_file(client, args.accounts, accounts, args.dry_run, echo=args.dry_run)
+                firefly_accounts = applied.accounts
+                accounts_note = f"accounts file: {applied.summary()}"
+            else:
+                firefly_accounts = client.get_all("accounts?type=asset")
+            assets = index_asset_accounts(firefly_accounts)
             currencies = load_currencies(client)
             firefly_ids = load_firefly_ids(ROW_STATE_DIR)
             pool = load_transfer_pool(client, assets, firefly_ids)
@@ -622,7 +702,7 @@ def import_all(args: argparse.Namespace) -> int:
             # Logged per file, so each import log says how the run went about it
             run_note = (
                 f"mode {'batch' if batch else 'per row'} ({old_rows} rows before {cutoff} in this run); "
-                f"read {len({id(a) for a in assets.values() if a})} asset accounts, {len(currencies)} currencies "
+                f"{accounts_note}; read {len(firefly_accounts)} asset accounts, {len(currencies)} currencies "
                 f"and {sum(len(t) for t in pool.values())} transfers "
                 f"in {time.monotonic() - started:.0f} s"
             )
@@ -674,6 +754,13 @@ def import_all(args: argparse.Namespace) -> int:
                 os.remove(RECALCULATE_FLAG)
                 if os.path.exists(FOLLOW_UP_ALERTED_FLAG):
                     os.remove(FOLLOW_UP_ALERTED_FLAG)
+    except AccountsFileError as exc:
+        reason = f"accounts file {args.accounts}: {exc}. Once fixed, the next run goes on"
+        if args.dry_run:
+            print(f"BLOCKED: {reason}", file=sys.stderr)
+        else:
+            set_blocked(reason)
+        return EXIT_UNAVAILABLE
     except (FireflyAuthError, FireflyUnavailableError) as exc:
         if args.dry_run:
             print(f"BLOCKED: {exc}", file=sys.stderr)
