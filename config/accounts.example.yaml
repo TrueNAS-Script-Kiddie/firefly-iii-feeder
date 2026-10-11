@@ -29,8 +29,9 @@
 #   iban                  IBAN, spaces allowed. Bank rows are matched to the account on it. [IBAN]
 #   account_number        Second identifier, free text: an account without an IBAN (card
 #                         customer reference, term deposit number), or a second IBAN whose rows
-#                         belong on this same account. Quote one of only digits ("0123"):
-#                         unquoted, YAML drops its leading zeros. [Account number]
+#                         belong on this same account. Spaces are dropped, as Firefly does.
+#                         Quote one of only digits ("0123"): unquoted, YAML drops its leading
+#                         zeros. [Account number]
 #   key                   Only for an account without iban and account_number (a cash wallet),
 #                         and then required: a short text the feeder keeps as the last line of
 #                         [Notes], "firefly-iii-feeder key: <key>", to find the account again,

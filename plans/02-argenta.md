@@ -410,6 +410,7 @@ the Argenta import adds a transfer next to them → **counted twice**.
    - the Firefly balance of every Argenta account = the balance in the Argenta app today;
    - card balance = the last `Nieuw saldo`;
    - every own transfer appears exactly once;
+   - the combined Rabobank account ends on 0 (its closing transfer to Argenta, plan 01 step 7.4);
    - nothing in `archive/unprocessed/`.
 
 Takes about an hour (~14,000 Fintro rows in batch + ~750 Argenta rows).

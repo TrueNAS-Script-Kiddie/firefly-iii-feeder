@@ -1,7 +1,9 @@
 # Plan 01 — Core, Fintro and Firefly setup
 
-Status: **in progress — steps 0 to 5 done; step 6 carried out, not committed yet (review);
-next: step 7.** To be carried out before
+Status: **in progress — steps 0 to 6 done; step 7: 7.1 and 7.2 done; 7.3 done (Fintro balances
+checked roughly: the app has newer transactions); 7.4 done (the combined Rabobank
+account ends on the closing transfer to Argenta; account numbers are now read without spaces,
+else Firefly's copy differed at every run); next: 7.5, with a new Fintro export.** To be carried out before
 [plan 02 (Argenta)](02-argenta.md).
 Nothing here is Argenta-specific, but plan 02 builds on it. Examples are made up (public
 repo); real rows stay in the terminal.
@@ -86,7 +88,7 @@ docstrings of `engine/regression.py`, `engine/debug_row.py` and `engine/firefly/
   `--accounts-only`, `start-over.bash --wipe-accounts` (`66589a6`). Checked on the server: a
   dry-run of a draft with every own account as it is in Firefly changes only what the draft
   changes on purpose.
-- **Step 6** — documentation of step 5.
+- **Step 6** — documentation of step 5 (`4990b62`).
 
 ### Step 7 — Start over (on the server)
 
@@ -105,8 +107,12 @@ second time.
    - every Fintro account balance in Firefly = the balance in the bank's app;
    - the old Rabobank current account ends on 0;
    - nothing in `archive/unprocessed/`.
-4. Add the Rabobank correction to the file: the combined Rabobank account's balance, sign
-   reversed. Apply it with `--accounts-only`; that account must then end on 0.
+4. Add the Rabobank correction to the file, on the closing date: what left the combined account
+   minus what came in, from the archived exports. "Left" includes the closing transfer to the
+   Argenta current account, which only the Argenta export holds; plan 02 loads it. So the
+   correction is not the balance in Firefly after the start-over. Apply it with
+   `--accounts-only`; that account must then end on the amount of the closing transfer, and on
+   0 after plan 02.
 5. Then the server test of §4.2.
 
 ## 4. Testing

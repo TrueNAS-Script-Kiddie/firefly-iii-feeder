@@ -81,7 +81,7 @@ class OwnAccount:
     name: str
     role: str
     iban: str  # without spaces; "" when none
-    account_number: str  # as written; "" when none
+    account_number: str  # without spaces, as Firefly stores it; "" when none
     monthly_payment_date: str  # ISO; credit cards only, else ""
     opening_balance: str  # signed, two decimals; "" when none (also for 0)
     opening_balance_date: str
@@ -93,7 +93,7 @@ class OwnAccount:
     @property
     def identifier(self) -> str:
         """What names the account in the correction keys: its IBAN, else its account number, else its key."""
-        return self.iban or self.account_number.replace(" ", "") or self.key
+        return self.iban or self.account_number or self.key
 
     @property
     def notes_in_firefly(self) -> str:
@@ -198,7 +198,8 @@ def parse_account(item: Any) -> OwnAccount:
         # Unquoted digits are a YAML number, which drops leading zeros
         if not isinstance(item["account_number"], str):
             raise ValueError(f"account_number must be quoted text, got {item['account_number']!r}")
-        account_number = parse_text(item["account_number"], "account_number")
+        # Firefly drops the spaces: kept, they would differ from Firefly at every run
+        account_number = parse_text(item["account_number"], "account_number").replace(" ", "")
 
     key = ""
     if not iban and not account_number:
