@@ -33,8 +33,7 @@ Established in the data:
 6. Term deposit: `Rekening tegenpartij` holds the **deposit number**, not an IBAN.
 7. Card settlement `Debet ten voordele van BCC` (current account → Mastercard): name
    `MASTERCARD  263`; 263 = day number of the statement date (20 September; in a leap year 264).
-   A few old rows: name empty. Every settlement goes to one and the same BCC IBAN, which looks like
-   BCC's general collection account, not one per card.
+   A few old rows: name empty.
 8. The Mededeling of card payments contains date+time, shop/place, country and card number, in
    two layouts (old: `CURRENCY NAME dd-mm-yy hh:mm`, the currency may be a foreign one; new:
    `[SHOP ]dd-mm-yyyy hh:mm PLACE[ COUNTRY] CARDNR`).
@@ -74,18 +73,16 @@ Established in the data:
    reload has the value (docs/archive-and-reload.md, rule 8).
 3. ✅ **Card account in the accounts file**: IBAN = the BCC collection number from the
    current-account export (so `Debet ten voordele van BCC` becomes a transfer), account number =
-   customer reference of the statement. Limit: that IBAN is the same for every card (point 0.7),
-   and two own accounts cannot share an IBAN. With a second card, the settlements no longer say
-   which card they pay; that card then needs its own way to match them.
+   customer reference of the statement.
 4. ✅ **Term deposit** (expired): its own closed account (kind `savings`), deposit number as
    account number → start and repayment are transfers, the interest is income from Argenta.
-5. ✅ **Dates**: see §2 "Four names per field" and "Card statement". Card PDF: settlement date →
+5. ✅ **Dates**: see §2 "Four names per field". Card PDF: settlement date →
    main date, because the repayment is on the statement with the statement date as transaction
    date and the day of the debit (about ten days later) as settlement date, and the current
    account books the day of the debit; with the statement date the two sides fall outside ±7 days
    and the transfer appears twice.
-6. ✅ **`MASTERCARD 263`** → counterparty name `Argenta Mastercard` (a second Mastercard may
-   come some day, see §1.3), note `Card statement of 2026-09-20` (263 = day number of the
+6. ✅ **`MASTERCARD 263`** → counterparty name `Argenta Mastercard` (a Mastercard of another bank,
+   paid from another account, may come some day), note `Card statement of 2026-09-20` (263 = day number of the
    statement date).
 7. ✅ **Start of the card history**: the oldest statements are missing, while the current account
    already pays them off. Opening balance of the card account calculated so that the balance is
@@ -161,21 +158,36 @@ Four names per field, from bank to Firefly:
 | Bedrag | `amount` | `amount` | `amount` without sign; sign → `type` |
 | Munt | `account_currency_code` | `account_currency_code` | `currency_code` |
 | Rekening | `asset_account_iban` | `asset_account_iban` | `source_id`/`destination_id` (own account looked up by IBAN or account number) |
-| — (card PDF: customer reference) | — | `asset_account_number` | idem |
 | Rekening tegenpartij | `opposing_account_iban` | `opposing_account_iban`, or `opposing_account_number` (deposit number), or empty (dummy/own IBAN) | `destination_iban`/`source_iban` (`_number`), or transfer |
 | Naam tegenpartij | `opposing_account_name` | `opposing_account_name` (+ place from Mededeling) | `destination_name`/`source_name` |
 | Beschrijving | `transaction_type` | `unmapped_transaction_type` + line in `notes` | via `notes` |
 | Mededeling | `description` | `description` (card rows: parsed, see step 3) | `description` |
 | — | — | `opposing_account_bic` (empty: Argenta gives no BIC) | `destination_bic`/`source_bic` |
 | — | — | `is_cash_withdrawal` | Firefly's Cash account |
-| — (card PDF: repayment line) | — | `is_card_repayment` | transfer from the card's `paid_from` (§1.2) |
-| — (card PDF: original amount + currency) | — | `foreign_amount`, `foreign_currency_code` | `foreign_amount`, `foreign_currency_code` |
 | — | — | `notes` | `notes` |
 | — | — | `unmapped_*` (copy of parts of the notes) | not sent |
 
 "Internal" = the name after reading, which validation, row state and `normalize_row` work
 with. "Normalized" = the fixed columns of `NORMALIZED_FIELDNAMES`, the same for every bank. The
 Firefly names differ from those; the translation happens only in `build_split()`.
+
+Card statement (PDF): the statement reader makes one row per line, with the columns of step 4.5.
+Examples made up.
+
+| Statement column | Internal (yaml) | Normalized CSV | Firefly API |
+|---|---|---|---|
+| Klantenreferentie | `asset_account_number` | `asset_account_number` (also `partition_by`) | own account looked up by account number |
+| Afschriftdatum + Volgnummer | `statement_date`, `sequence_number` | only the duplicate key (`2018-12-20\|03`), so in `row_key`; `external_id` stays empty: a line has no bank reference | `internal_reference` |
+| Datum verrekening | `primary_transaction_date` | `primary_transaction_date` (§1.5) | `date` |
+| Datum transactie | `payment_date` | `payment_date` | `payment_date` |
+| Omschrijving | `statement_text` | purchase or refund: `opposing_account_name` (`ACME MARKT GLASGOW GBR`); repayment line: in the type line of `notes` | `destination_name`/`source_name` |
+| Bedrag | `amount` | `amount` (`12,34-` → `-12.34`) | `amount` without sign; sign → `type` |
+| Munt | `account_currency_code` | `account_currency_code`; `EUR`, otherwise the line fails | `currency_code` |
+| Origineel bedrag, Originele munt | `foreign_amount`, `foreign_currency_code` | `foreign_amount` (signed like `amount`), `foreign_currency_code` | `foreign_amount`, `foreign_currency_code` |
+| Koers | `exchange_rate` | after the check of §1.9, a line in `notes`: `Koers: 1,0800000 USD` | via `notes` |
+| Kaartnummer, Kaarthouder | `card_number`, `card_holder` | a line in `notes`: `Kaart 1234-56XX-XXXX-7890 VAN DER MEULEN TOM` (the number masked as printed) | via `notes` |
+| — (kind of line) | — | type line in `notes` and `unmapped_transaction_type`: `Betaling met kredietkaart` (purchase), `Terugbetaling met kredietkaart` (refund), `Afbetaling kredietkaart: <printed text>` (repayment line, e.g. `DOMICILIERING VIA UW BANK`) | via `notes` |
+| — (repayment line) | — | `is_card_repayment` = `1`, counterparty empty | transfer from the card's `paid_from` (§1.2) |
 
 ## 3. Steps (order = commits)
 
@@ -309,7 +321,7 @@ parsing.
    read half.
 2. Statement reader: lines on y, columns on x. Header: statement date (older generations
    `dd/mm/yy`, newer `dd/mm/yyyy`), period `from … to …`, customer reference (→
-   `asset_account_number`), per card `Kaartnummer`.
+   `asset_account_number`), per card `Kaartnummer` and card holder.
    **Year of each `dd/mm`** from the period (a Dec→Jan statement crosses the year boundary), not
    from "nearest date".
 3. Kinds of lines:
@@ -350,7 +362,8 @@ parsing.
        runs the same checks and prints instead of alerting.
 
 5. Rows: `Klantenreferentie, Afschriftdatum, Volgnummer, Datum transactie, Datum verrekening,
-   Omschrijving, Bedrag, Munt, Origineel bedrag, Originele munt, Koers, Kaartnummer`.
+   Omschrijving, Bedrag, Munt, Origineel bedrag, Originele munt, Koers, Kaartnummer, Kaarthouder`
+   (mapping: §2 "Card statement").
    - `duplicate_key` = statement date + sequence number, joined by `extract_duplicate_key` with
      `|` (`2018-12-20|03`, made up; row_key `<customer reference>|2018-12-20|03`): a statement
      never changes, and two identical lines each get their own key that way.
@@ -374,7 +387,7 @@ In the existing structure (per-bank README, `docs/output-contract.md`):
   - export, columns, unique row, field mapping, parsing rules;
   - quirks: dummy IBAN, non-unique reference, own IBAN on interest, BCC settlement, missing
     months = no activity;
-  - `paid_from` in the accounts file, and the card's IBAN limit (§1.3);
+  - `paid_from` in the accounts file;
   - checks, incl. the archive check (statements against the current account).
 
   `argenta/CLAUDE.md` with `@README.md`, `argenta_mastercard/CLAUDE.md` with

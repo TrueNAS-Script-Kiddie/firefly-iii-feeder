@@ -272,8 +272,9 @@ transaction #id", counted as already present. Firefly gotchas: AGENTS.md "Firefl
   - A counterparty account without an IBAN goes to `source_number` / `destination_number`: Firefly
     validates `*_iban` as an IBAN, `*_number` is free text.
   - A currency disabled in Firefly is enabled (logged); one Firefly doesn't know fails the row.
-  - No counterparty → `(onbekend)`, or Firefly's Cash account for a row the bank module marked
-    `is_cash_withdrawal` (`1`); a new bank only has to set that mark.
+  - No counterparty → `(onbekend)`. A withdrawal the bank module marked `is_cash_withdrawal` (`1`)
+    always goes to Firefly's Cash account; the counterparty name the bank gives (the ATM) goes in
+    front of the description. A new bank only has to set that mark.
 - **Own transfers: match or create** (`claim_transfer`). A row whose counterparty is an own
   account first claims an existing transfer between the same accounts, same amount, within
   `TRANSFER_MATCH_DAYS`, whose side (out or in) is still free; else it creates one. Order and
@@ -350,7 +351,8 @@ described in `archive/accounts.yaml`, in the archive repo, so a reload has them 
   opening balance of 0 is none (Firefly keeps none for 0). Closed accounts (`active: false`) are
   listed by Firefly and may still be used by id, so their rows import, also at a reload.
 - **Unlisted**: an own account in Firefly that the file does not list gives the alert `FIREFLY OWN
-  ACCOUNTS NOT IN THE ACCOUNTS FILE` in every run that imports (one mail per drop, not per minute).
+  ACCOUNTS NOT IN THE ACCOUNTS FILE` at the end of every run that imports and is not blocked or
+  crashed (one mail per drop, not per minute while a run keeps failing).
 - **Refused or invalid**: like an outage (§11, §13): exit 69, nothing imported, files stay, one
   alert through `firefly-import-blocked.flag`; the next run after the fix goes on. The alert names
   the file, the account and the reason.

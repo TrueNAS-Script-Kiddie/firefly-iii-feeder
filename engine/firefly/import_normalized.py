@@ -278,14 +278,22 @@ def build_split(
         raise ValueError(f"Counterparty {opposing_iban or opposing_number} is the row's own account")
     outgoing = amount.startswith("-")
 
-    # Without a counterparty Firefly books on its Cash account: right for cash withdrawals only
+    # A withdrawal without a destination goes to Firefly's Cash account: every cash withdrawal, also
+    # one where the bank names the ATM. That name moves into the description, so it is not lost.
     opposing_name = row.get("opposing_account_name", "")
-    if not opposing_name and not opposing_iban and not opposing_number:
-        opposing_name = "" if row.get("is_cash_withdrawal") == "1" else UNKNOWN_COUNTERPARTY
+    description = row.get("description", "")
+    if outgoing and row.get("is_cash_withdrawal") == "1":
+        if opposing_iban or opposing_number:
+            raise ValueError(f"Cash withdrawal with a counterparty account: {opposing_iban or opposing_number}")
+        if opposing_name:
+            description = f"{opposing_name}: {description}" if description else opposing_name
+        opposing_name = ""
+    elif not opposing_name and not opposing_iban and not opposing_number:
+        opposing_name = UNKNOWN_COUNTERPARTY
 
     # Firefly requires a description; fall back to what identifies the transaction best
     notes = row.get("notes", "")
-    description = row.get("description", "") or opposing_name or notes.split("\n", 1)[0]
+    description = description or opposing_name or notes.split("\n", 1)[0]
 
     split: dict[str, Any] = {
         "date": row["primary_transaction_date"],
@@ -617,8 +625,7 @@ def apply_accounts_file(
 ) -> Applied:
     """
     Apply the accounts read from `path`; changes go to a log of their own (none in a dry run),
-    also printed with `echo` (never in cron: it mails any output). Every own account the file does
-    not list is alerted.
+    also printed with `echo` (never in cron: it mails any output).
     """
     accounts_log = os.path.join(LOG_DIR, f"{datetime.now():%Y%m%d-%H%M%S}-firefly-accounts.log")
 
@@ -628,19 +635,23 @@ def apply_accounts_file(
         if not dry_run:
             log_event(accounts_log, message)
 
-    applied = apply_accounts(client, accounts, dry_run, log)
-    if applied.unlisted:
-        listed = "\n".join(
-            f"- '{a['attributes']['name']}' (IBAN {a['attributes'].get('iban') or '-'}, "
-            f"account number {a['attributes'].get('account_number') or '-'}, Firefly id {a['id']})"
-            for a in applied.unlisted
-        )
-        alert(
-            f"FIREFLY OWN ACCOUNTS NOT IN THE ACCOUNTS FILE: {len(applied.unlisted)}",
-            f"{listed}\n\nEvery own account belongs in {path}: add it there, or delete it in Firefly. "
-            "Alerted in every run that imports.",
-        )
-    return applied
+    return apply_accounts(client, accounts, dry_run, log)
+
+
+def alert_unlisted(path: str, applied: Applied) -> None:
+    """Alert every own account in Firefly that the file does not list."""
+    if not applied.unlisted:
+        return
+    listed = "\n".join(
+        f"- '{a['attributes']['name']}' (IBAN {a['attributes'].get('iban') or '-'}, "
+        f"account number {a['attributes'].get('account_number') or '-'}, Firefly id {a['id']})"
+        for a in applied.unlisted
+    )
+    alert(
+        f"FIREFLY OWN ACCOUNTS NOT IN THE ACCOUNTS FILE: {len(applied.unlisted)}",
+        f"{listed}\n\nEvery own account belongs in {path}: add it there, or delete it in Firefly. "
+        "Alerted at the end of every run that imports, unless that run was blocked or crashed.",
+    )
 
 
 def apply_accounts_only(args: argparse.Namespace) -> int:
@@ -652,6 +663,7 @@ def apply_accounts_only(args: argparse.Namespace) -> int:
         if not args.dry_run:
             os.makedirs(LOG_DIR, exist_ok=True)
         applied = apply_accounts_file(client, args.accounts, accounts, args.dry_run, echo=True)
+        alert_unlisted(args.accounts, applied)
     except AccountsFileError as exc:
         print(f"BLOCKED: accounts file {args.accounts}: {exc}", file=sys.stderr)
         return EXIT_UNAVAILABLE
@@ -678,6 +690,7 @@ def import_all(args: argparse.Namespace) -> int:
             os.makedirs(d, exist_ok=True)
 
     totals: collections.Counter = collections.Counter()
+    applied: Applied | None = None
     try:
         # Applied only by runs that import: an export needing a new account comes with it
         accounts = load_accounts_file(args.accounts) if files and os.path.isfile(args.accounts) else None
@@ -768,6 +781,9 @@ def import_all(args: argparse.Namespace) -> int:
             set_blocked(str(exc))
         return EXIT_UNAVAILABLE
 
+    # Only now: a run that stays blocked or crashes repeats every minute, and would mail it each time
+    if applied is not None:
+        alert_unlisted(args.accounts, applied)
     if not args.dry_run and os.path.exists(BLOCKED_FLAG):
         os.remove(BLOCKED_FLAG)
     if args.dry_run:

@@ -95,7 +95,7 @@ into the parser (`debug_row` shows where a row gets stuck).
 | `data/row-state/` | Per account (`<account>.csv`): every bank row the feeder knows and its Firefly id; `backups/`. See architectural_patterns.md §7 |
 | `data/logs/` | `<base>.log` (normalizer) and `<base>-import.log` (mode, Firefly state read time, result and duration). `<time>-firefly-follow-up.log`: rules and running balances after a batch import, with durations; `<time>` is when the batch set the flag, so retries append. `<time>-firefly-accounts.log`: what the accounts file changed in Firefly, only when it changed something |
 | `data/*.flag` | State between runs (pending follow-up or push, one alert per outage): architectural_patterns.md §11 |
-| `data/temp/` | Working files (output and row state being prepared); emptied after each bank file |
+| `data/temp/` | Working files (output and row state being prepared); emptied at the start and the end of each bank file |
 | `data-before-start-over/` | The previous `data/`, moved aside by `start-over.bash`; replaced by the next one |
 
 File names in `data/` describe the content: `<base>` = `<run>-<bank>-<account>-<first>_<last>`,

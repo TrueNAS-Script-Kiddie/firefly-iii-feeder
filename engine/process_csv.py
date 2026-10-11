@@ -2,6 +2,7 @@
 import importlib
 import os
 import re
+import shutil
 import sys
 import traceback
 from datetime import datetime
@@ -109,6 +110,8 @@ def main() -> None:
     }
 
     try:
+        # Leftovers of a file that stopped early (critical exit, reboot): nothing in temp/ outlives its file
+        shutil.rmtree(paths["temp_dir"], ignore_errors=True)
         # Ensure directory structure exists
         for d in (
             paths["failed_dir"],

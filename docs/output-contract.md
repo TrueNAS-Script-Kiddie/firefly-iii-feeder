@@ -75,7 +75,7 @@ The importer turns each row into one Firefly transaction (`build_split` in
 | `notes` | `notes` |
 | `external_id` | `external_id` |
 | `internal_reference` | `row_key` |
-| source / destination | own account by IBAN or account number (`asset_account_iban`, else `asset_account_number`, each matched against both fields of the Firefly account); counterparty by name, IBAN, account number and BIC; no counterparty → `(onbekend)`, or Firefly's Cash account for a cash withdrawal |
+| source / destination | own account by IBAN or account number (`asset_account_iban`, else `asset_account_number`, each matched against both fields of the Firefly account); counterparty by name, IBAN, account number and BIC; no counterparty → `(onbekend)`; a cash withdrawal always → Firefly's Cash account, with the counterparty name (the ATM) in front of `description` |
 
 A transfer between own accounts is stored once: it carries the fields of whichever side was
 imported first; the other side's `external_id`, `row_key` and `notes` stay in its `data/imported/`
@@ -98,3 +98,4 @@ feeder's `firefly-iii-feeder key: <key>`.
 | 2026-10-09 | `booking_date` renamed `interest_date`, sent to Firefly's `interest_date` instead of `book_date`. New columns `foreign_amount`, `foreign_currency_code` (not yet sent to Firefly). |
 | 2026-10-09 | New columns `asset_account_number` and `row_key`, added at the end. Sent to Firefly: `foreign_amount` / `foreign_currency_code`, and `row_key` as `internal_reference`. Own accounts are found by IBAN or account number. |
 | 2026-10-11 | Own accounts and correction bookings come from the accounts file: corrections carry `internal_reference` `correction\|…`; own account ids may change at a start-over. |
+| 2026-10-11 | A cash withdrawal (`is_cash_withdrawal`) always goes to Firefly's Cash account, also when the bank names the ATM; that name goes in front of the Firefly `description`, not to an expense account. Applies to rows already in Firefly after a start-over. |
