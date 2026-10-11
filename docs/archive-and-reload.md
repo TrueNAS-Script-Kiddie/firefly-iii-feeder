@@ -319,7 +319,7 @@ The archive repo; the rest of the one-time setup is in AGENTS.md "Setup". Every 
 - **Forgejo is not replicated to truenas-backup** (still to do in sync_truenas_servers): the
   archive and its Forgejo remote are on one machine, covered only by the hourly snapshots of
   `app-ds`.
-- **`bank-csv-originals/`** still holds exports the feeder cannot read yet (Argenta: xlsx, pdf);
+- **`bank-csv-originals/`** still holds exports the feeder cannot read yet (Argenta: the Mastercard pdf statements);
   they enter the archive once it can.
 
 ## Later
