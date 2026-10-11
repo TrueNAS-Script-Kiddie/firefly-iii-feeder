@@ -244,10 +244,9 @@ sequenceDiagram
     S->>D: data/ → data-before-start-over/ (previous one deleted),<br/>files waiting in incoming/ go back in
     S->>D: archive's unprocessed/ then originals/ → incoming/ (copies, flat)
     S->>S: release the lock
-    loop every minute, oldest #lt;run#gt; first
-        C->>F: apply accounts.yaml (first run), normalize + import
-        C--xA: nothing new, except a rejected file that now succeeds
-    end
+    C->>F: the first run after the 30 s upload wait: apply accounts.yaml,<br/>then normalize and import every file, oldest #lt;run#gt; first
+    Note over C: the runs of the following minutes find the lock taken and stop
+    C--xA: nothing new, except a rejected file that now succeeds
 ```
 
 1. Refuses to run as anyone but the owner of the feeder folder: a root-owned file in `data/` or
@@ -317,7 +316,7 @@ The archive repo; the rest of the one-time setup is in AGENTS.md "Setup". Every 
 
 ## Known limitations
 
-- **Forgejo is not replicated to truenas-backup** (still to do in sync-truenas-servers): the
+- **Forgejo is not replicated to truenas-backup** (still to do in sync_truenas_servers): the
   archive and its Forgejo remote are on one machine, covered only by the hourly snapshots of
   `app-ds`.
 - **`bank-csv-originals/`** still holds exports the feeder cannot read yet (Argenta: xlsx, pdf);

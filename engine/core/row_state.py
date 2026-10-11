@@ -12,6 +12,7 @@ refused, so a later export carrying them retries them.
 
 import csv
 import os
+import re
 import shutil
 from collections import defaultdict
 from collections.abc import Callable
@@ -24,6 +25,8 @@ from typing import Any
 MAX_BACKUPS = 50
 MAX_BACKUP_AGE_DAYS = 365
 RUN_TS_FORMAT = "%Y%m%d-%H%M%S"
+# Backup '<run>-<account>.csv', <run> = '<YYYYMMDD-HHMMSS>-<file number>'
+RE_BACKUP_NAME = re.compile(r"^([0-9]{8}-[0-9]{6})-[0-9]+-(.+)\.csv$")
 
 FIREFLY_ID = "firefly_id"
 
@@ -215,15 +218,16 @@ def rotate_backups(
         backups_per_account: defaultdict[str, list[tuple[datetime, str]]] = defaultdict(list)
 
         for filename in os.listdir(backup_dir):
-            if not filename.endswith(".csv"):
+            # After the run id, not after the last "-": an account (a card's customer reference)
+            # may contain one
+            match = RE_BACKUP_NAME.match(filename)
+            if not match:
                 continue
             try:
-                timestamp = datetime.strptime(filename[:15], RUN_TS_FORMAT)
+                timestamp = datetime.strptime(match.group(1), RUN_TS_FORMAT)
             except ValueError:
-                # Ignore files that don't start with a run timestamp
                 continue
-            account = os.path.splitext(filename)[0].rsplit("-", 1)[-1]
-            backups_per_account[account].append((timestamp, filename))
+            backups_per_account[match.group(2)].append((timestamp, filename))
 
         cutoff = datetime.now() - timedelta(days=MAX_BACKUP_AGE_DAYS)
 

@@ -32,8 +32,9 @@ Established in the data:
 5. Interest (`Taks Portkost Interest`) has the **own account** as counterparty IBAN.
 6. Term deposit: `Rekening tegenpartij` holds the **deposit number**, not an IBAN.
 7. Card settlement `Debet ten voordele van BCC` (current account → Mastercard): name
-   `MASTERCARD  247`; 247 = day number of the statement date (4 September; in a leap year 248).
-   A few old rows: name empty.
+   `MASTERCARD  263`; 263 = day number of the statement date (20 September; in a leap year 264).
+   A few old rows: name empty. Every settlement goes to one and the same BCC IBAN, which looks like
+   BCC's general collection account, not one per card.
 8. The Mededeling of card payments contains date+time, shop/place, country and card number, in
    two layouts (old: `CURRENCY NAME dd-mm-yy hh:mm`, the currency may be a foreign one; new:
    `[SHOP ]dd-mm-yyyy hh:mm PLACE[ COUNTRY] CARDNR`).
@@ -45,8 +46,9 @@ Established in the data:
     identical lines on one statement occur (same day, shop, amount).
 11. Missing months in the PDF folder coincide with months without a BCC debit on the current
     account (sample): no activity → no statement.
-12. Fintro exports contain dozens of rows to/from the Argenta accounts; these are now in Firefly
-    as expense/income, not as a transfer between own accounts.
+12. Fintro exports contain dozens of rows to/from the Argenta accounts. The accounts file already
+    lists both Argenta accounts with their IBAN, so these rows are in Firefly as transfers with
+    one side; the Argenta rows will claim them (match or create, architectural_patterns.md §13).
 13. Server: Python 3.11, PyYAML, **no** PDF or xlsx library and no `pdftotext`.
 
 ## 1. Decisions
@@ -64,25 +66,32 @@ Established in the data:
      `is_card_repayment` = `1` (like `is_cash_withdrawal`) and leaves its counterparty empty.
    - The importer replaces the empty counterparty by the `paid_from` of the row's own account. No
      `paid_from` → the row fails.
+   - `paid_from` must be the `iban` or `account_number` of another account in the file, else the
+     file is invalid: otherwise a typo would silently make the repayment a deposit from outside
+     instead of a transfer.
 
    This way the normalizer, `debug_row` and the regression test never read `archive/`, and a
    reload has the value (docs/archive-and-reload.md, rule 8).
 3. ✅ **Card account in the accounts file**: IBAN = the BCC collection number from the
    current-account export (so `Debet ten voordele van BCC` becomes a transfer), account number =
-   customer reference of the statement.
+   customer reference of the statement. Limit: that IBAN is the same for every card (point 0.7),
+   and two own accounts cannot share an IBAN. With a second card, the settlements no longer say
+   which card they pay; that card then needs its own way to match them.
 4. ✅ **Term deposit** (expired): its own closed account (kind `savings`), deposit number as
    account number → start and repayment are transfers, the interest is income from Argenta.
-5. ✅ **Dates**: see §2 "Four names per field". Card PDF: settlement date → main date, because
-   the repayment is on the statement with the statement date (the 4th) as transaction date and
-   the day of the debit (around the 14th) as settlement date, and the current account books that
-   14th; with the 4th the two sides fall outside ±7 days and the transfer appears twice.
-6. ✅ **`MASTERCARD 247`** → counterparty name `Argenta Mastercard` (a second Mastercard may
-   come some day), note `Card statement of 2026-09-04` (247 = day number of the statement date).
+5. ✅ **Dates**: see §2 "Four names per field" and "Card statement". Card PDF: settlement date →
+   main date, because the repayment is on the statement with the statement date as transaction
+   date and the day of the debit (about ten days later) as settlement date, and the current
+   account books the day of the debit; with the statement date the two sides fall outside ±7 days
+   and the transfer appears twice.
+6. ✅ **`MASTERCARD 263`** → counterparty name `Argenta Mastercard` (a second Mastercard may
+   come some day, see §1.3), note `Card statement of 2026-09-20` (263 = day number of the
+   statement date).
 7. ✅ **Start of the card history**: the oldest statements are missing, while the current account
    already pays them off. Opening balance of the card account calculated so that the balance is
    right from the first statement; the purchases before it are missing as separate lines.
    ⏰ **Remind**: the user is still trying to get the older statements from Argenta; ask before
-   the reload (§4). If they come, this opening balance and this limitation fall away.
+   loading Argenta (§4). If they come, this opening balance and this limitation fall away.
 8. ✅ **`Referentie` date check** (point 0.3): the row fails if code and booking date differ.
 9. ✅ **Foreign currency** (mechanism: `foreign_amount` / `foreign_currency_code`, docs/output-contract.md):
    - Card PDF: `10,80-USD` + `1 EUR=1,0800000 USD` → 10.80 ÷ 1.08 = 10.00 = EUR amount (made
@@ -92,8 +101,8 @@ Established in the data:
 10. ✅ **The file name of the original plays no role anywhere**: xlsx and pdf are recognized by
     content (column header, statement text), like CSV now.
 11. ✅ **Period in the file names of a statement = the period printed on it**, so you recognize
-    the statement by its name. Example (made up): a statement `van 05/11/2018 tot 04/12/2018` is
-    named `…-2018-11-05_2018-12-04-…`, whatever dates its lines carry. Mechanism: step 1 (a
+    the statement by its name. Example (made up): a statement `van 21/11/2018 tot 20/12/2018` is
+    named `…-2018-11-21_2018-12-20-…`, whatever dates its lines carry. Mechanism: step 1 (a
     reader may give the file's period) and step 4.
 12. ✅ **Numbers from an xlsx are written in their shortest exact form**: `3.1000000000000001`
     (how Excel may store 3.1) → `3.1`, `45.0` → `45`. This is the same value Excel shows, it keeps
@@ -187,7 +196,9 @@ lists what is left.
      - xlsx (a zip): the zip end record `PK\x05\x06` in the last 64 KB;
      - PDF: `%%EOF` in the last 1 KB.
 
-     With `tail -c … | grep -q`, only when there is a file. Each keeps the 10-minute fallback.
+     With `tail -c … | LC_ALL=C grep -qaF -e $'PK\x05\x06'` (`-a`: binary data is searched as
+     text; `LC_ALL=C`: bytes, not UTF-8 characters; `-F`: a fixed string), only when there is a
+     file. Each keeps the 10-minute fallback.
      The newline test alone would never pass for xlsx or pdf: every such file would wait 10
      minutes unprotected.
    - Repeat the idle measurement, ≤ 2 ms.
@@ -227,6 +238,10 @@ lists what is left.
 `engine/banks/fintro/parsers.py` to `engine/core/parsers.py`; Fintro imports them from there. No
 change in behaviour. Only now, because Argenta is the second user: then it is clear which form
 the shared version needs.
+
+The shared `parse_iban` also checks the IBAN checksum, and `engine/firefly/accounts.py` drops its
+own `parse_iban` for it: one IBAN check in the code. Every IBAN in the Fintro exports has a valid
+checksum (checked), so the regression test must still show zero differences.
 
 ### Step 3 — Argenta accounts (`config/argenta.yaml`, `engine/banks/argenta/`)
 
@@ -336,13 +351,15 @@ parsing.
 
 5. Rows: `Klantenreferentie, Afschriftdatum, Volgnummer, Datum transactie, Datum verrekening,
    Omschrijving, Bedrag, Munt, Origineel bedrag, Originele munt, Koers, Kaartnummer`.
-   - `duplicate_key` = statement date + sequence number (`2018-12-04/03`, made up): a statement
+   - `duplicate_key` = statement date + sequence number, joined by `extract_duplicate_key` with
+     `|` (`2018-12-20|03`, made up; row_key `<customer reference>|2018-12-20|03`): a statement
      never changes, and two identical lines each get their own key that way.
    - `partition_by` = customer reference.
    - The reader returns the printed period `from … to …` as `period` (step 1, §1.11).
 6. Importer (`engine/firefly/import_normalized.py`), with the accounts file (architectural_patterns.md §14):
    - `is_card_repayment` at the end of `NORMALIZED_FIELDNAMES`;
-   - `paid_from` in the accounts file (template, validation: credit cards only);
+   - `paid_from` in the accounts file (template; validation: credit cards only, and the `iban` or
+     `account_number` of another account in the file, §1.2);
    - `build_split`: a row with `is_card_repayment=1` gets the `paid_from` of its own account as
      counterparty, and so becomes a transfer that claims or creates the transfer of the
      current-account row. No `paid_from` → the row fails.
@@ -357,7 +374,7 @@ In the existing structure (per-bank README, `docs/output-contract.md`):
   - export, columns, unique row, field mapping, parsing rules;
   - quirks: dummy IBAN, non-unique reference, own IBAN on interest, BCC settlement, missing
     months = no activity;
-  - `paid_from` in the accounts file;
+  - `paid_from` in the accounts file, and the card's IBAN limit (§1.3);
   - checks, incl. the archive check (statements against the current account).
 
   `argenta/CLAUDE.md` with `@README.md`, `argenta_mastercard/CLAUDE.md` with
@@ -367,10 +384,13 @@ In the existing structure (per-bank README, `docs/output-contract.md`):
   - "Key Directories": `data/incoming/` takes csv, xlsx, pdf;
   - "Banks": Argenta;
   - "Adding a New Bank": readers for non-CSV (`reader:` in the yaml, `source_lines`, `period`), optional `archive_check.py`;
-  - "Running": `engine.archive_checks --print`; "Key Directories": `engine/archive_checks.py`.
+  - "Running": `engine.archive_checks --print`; "Key Directories": `engine/archive_checks.py`;
+  - the file-name paragraph under "Key Directories": `<first>_<last>` is the period printed on a
+    statement, else the first and last `primary_transaction_date` (§1.11).
 - **README.md**: overview (exports instead of CSVs), "Supported Banks", project tree.
 - **architectural_patterns.md**:
   - §1: the "Load" step is `load_rows` (CSV, xlsx, bank reader for pdf);
+  - §10: the period in the names, as in AGENTS.md above;
   - §11: the upload check per file type; the archive checks after the importer, and when they run;
   - §13: `is_card_repayment` → `paid_from`.
 - **`docs/output-contract.md`**:
@@ -379,6 +399,7 @@ In the existing structure (per-bank README, `docs/output-contract.md`):
   - drop "Rows are unique per (`asset_account_iban`, `external_id`)": `row_key` is the unique
     key;
   - the new column `is_card_repayment`;
+  - `asset_account_iban` may be empty: a card row names its account by `asset_account_number`;
   - Argenta's transaction types;
   - a line under "Changes".
 - **docs/archive-and-reload.md** "Known limitations": drop the bullet that Argenta's exports
@@ -386,35 +407,37 @@ In the existing structure (per-bank README, `docs/output-contract.md`):
   AGENTS.md "Key Directories" is not changed.
 - This plan disappears; the lasting facts are then in the files above.
 
-## 4. Start over with Argenta (you, on the server)
+## 4. Load Argenta (you, on the server)
 
-Needed because the Fintro rows to Argenta (point 0.12) are now expenses/income: without a start-over,
-the Argenta import adds a transfer next to them → **counted twice**.
+No start-over is needed to load it: the Argenta accounts are already in the accounts file, so the
+Fintro rows to them are transfers with one side, which the Argenta rows claim (point 0.12). The
+new accounts (card, term deposit) are created by the first run that imports; the BCC IBAN and the
+deposit number are on no expense or revenue account (only Argenta's own exports carry them), so
+Firefly accepts them as own accounts.
 
 1. ⏰ Ask about §1.7 first (older card statements).
 2. Add to `archive/accounts.yaml`, through a dry-run (AGENTS.md "Running"):
-   - the Argenta current and savings accounts;
+   - the opening balance of the Argenta current and savings accounts (already in the file);
    - the Argenta Mastercard (§1.3), with `paid_from` (§1.2) and its opening balance (§1.7);
    - the term deposit (§1.4).
 
    The xlsx exports have no balance column: the Argenta opening balance comes from the Argenta
    app or an account statement.
-3. `start-over.bash` as the cron user (AGENTS.md "Start Over"): wipes Firefly (also the
-   expense/revenue accounts with Argenta IBANs) and reloads the archive; the first run applies
-   the accounts file before importing.
-4. Right after it, through the share, copy into `data/incoming/` (flat: the files themselves,
-   not their folders): the xlsx files of `bank-csv-originals/Argenta/` and the statements in
-   `Mastercard/<year>/`. Not before the start-over: cron
-   would import them into the old Firefly at once. `bank-csv-originals/` stays as it is.
-5. Check:
+3. Through the share, copy into `data/incoming/` (flat: the files themselves, not their folders):
+   the xlsx files of `bank-csv-originals/Argenta/` and the statements in
+   `bank-csv-originals/Argenta/Mastercard/<year>/`. `bank-csv-originals/` stays as it is.
+4. Check:
    - the Firefly balance of every Argenta account = the balance in the Argenta app today;
    - card balance = the last `Nieuw saldo`;
    - every own transfer appears exactly once;
    - the combined Rabobank account ends on 0 (its closing transfer to Argenta is in the Argenta
      export; the correction in the accounts file is only the rest);
    - nothing in `archive/unprocessed/`.
+5. Then `start-over.bash` as the cron user (AGENTS.md "Start Over"), as proof that the archive
+   alone rebuilds Fintro and Argenta together: read the balances and counts first, and compare
+   them after the reload.
 
-Takes about an hour (~14,000 Fintro rows in batch + ~750 Argenta rows).
+Step 3 takes a few minutes (~750 rows, batch mode); the start-over about an hour.
 
 ## 5. Testing
 

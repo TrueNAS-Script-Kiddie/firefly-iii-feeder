@@ -64,7 +64,7 @@
 
 - name: ACME Mastercard
   kind: credit_card
-  monthly_payment_date: 2016-01-14
+  monthly_payment_date: 2016-01-25
   iban: DE89 3704 0044 0532 0130 00  # account the card balance is collected on: makes the
                                      # monthly settlement from the current account a transfer
   account_number: "1234567890"       # customer reference on the card statement
