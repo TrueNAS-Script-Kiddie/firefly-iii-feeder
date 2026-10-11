@@ -14,7 +14,7 @@ ordered sequence; every way out goes through `finalize` (§2).
 
 ```mermaid
 flowchart TD
-    L[Load CSV<br/>encoding + delimiter detection] --> E{empty, or no bank<br/>config matches the header?}
+    L[Load the export<br/>CSV, xlsx, or PDF via a bank reader] --> E{unreadable, empty, or no<br/>bank config matches the header?}
     E -->|yes| R65[structure_failed, 65]
     E -->|no| V[Validate, filter, map columns]
     V --> A{rows left after filtering,<br/>and every one invalid?}
@@ -34,7 +34,7 @@ flowchart TD
 
 | Step | Where |
 |---|---|
-| Load | `load_csv_rows` in [engine/core/csv_runtime.py](../../engine/core/csv_runtime.py) |
+| Load | `load_rows` in [engine/core/csv_runtime.py](../../engine/core/csv_runtime.py), by extension: CSV; xlsx (`xlsx_reader`, first sheet); PDF through the `reader` a bank config names. Gives the rows, a source line per row (`17`, `p3/12`) and the period a statement states. Unreadable → structure_failed |
 | Bank | `autodetect_bank` in [engine/core/csv_validation.py](../../engine/core/csv_validation.py): every required column of exactly one config present |
 | Validate | `validate_and_prepare`: `filter` / `filter_regex` drop a row (counted per reason in the log); a failing `regex` marks it, and the loop sends it to normalize-failed |
 | Name outputs | `describe_output`, `archive_paths` (§10) |
@@ -226,8 +226,10 @@ together, and a name says what is in it; this gives a complete audit trail witho
   a second instance exits at once, and the kernel drops the lock when the process dies, so a crash
   or reboot cannot leave a stale lock. `start-over.bash` takes the same lock.
 - **Upload check** — skip a file until its `ctime` is ≥ 30 s old (`UPLOAD_SETTLE_SECONDS`;
-  Explorer and `cp -p` keep an old mtime, but every write bumps ctime) and its last byte is a
-  newline; after 10 min process anyway, so a broken file gets reported.
+  Explorer and `cp -p` keep an old mtime, but every write bumps ctime) and it ends as a complete
+  file of its type does: a CSV's last byte is a newline, an xlsx (zip) has its end record
+  `PK\x05\x06` in the last 64 KB, a PDF `%%EOF` in the last 1 KB. After 10 min process anyway, so
+  a broken file gets reported.
 - Exit codes `0/65/75/99` are "Python handled it"; anything else triggers a fallback move of the
   incoming file to `archive/unprocessed/`, unless that folder already holds its content.
 - After every bank file, the importer (§13); then the archive is committed and pushed

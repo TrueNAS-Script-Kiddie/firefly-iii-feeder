@@ -1,11 +1,12 @@
 #!/bin/bash
 
-shopt -s nullglob extglob
+shopt -s nullglob extglob nocaseglob
 
 # Runs every minute: until there is work, use builtins only (no subshells, no
 # external commands, no Python).
-# Every *.csv glob below is !(~\$*).csv: Excel leaves a lock file "~$<name>.csv" next to a CSV
-# opened through the share. It is no export, and one left behind would end every idle run.
+# Every glob on incoming/ and normalized/ starts with !(~\$*): Excel leaves a lock file
+# "~$<name>.csv" (.xlsx) next to a file opened through the share. It is no export, and one left
+# behind would end every idle run. nocaseglob: an export named *.PDF or *.XLSX counts too.
 
 # Ensure working directory is the project root (cron starts in /)
 if [[ "$0" == */* ]]; then
@@ -29,10 +30,10 @@ RECALCULATE_FLAG="${BASE_DIR}/data/firefly-recalculate.flag"
 # Set while archive commits wait for a push (Forgejo unreachable); every run retries
 ARCHIVE_PUSH_FLAG="${BASE_DIR}/data/archive-push-pending.flag"
 UPLOAD_SETTLE_SECONDS=30
-INCOMPLETE_LINE_GRACE_SECONDS=600
+INCOMPLETE_UPLOAD_GRACE_SECONDS=600
 
 # Nothing to normalize, import, follow up or push → done
-PENDING=("${IN_DIR}"/!(~\$*).csv "${NORMALIZED_DIR}"/!(~\$*).csv)
+PENDING=("${IN_DIR}"/!(~\$*).@(csv|xlsx|pdf) "${NORMALIZED_DIR}"/!(~\$*).csv)
 ((${#PENDING[@]})) || [[ -e "${RECALCULATE_FLAG}" ]] || [[ -e "${ARCHIVE_PUSH_FLAG}" ]] || exit 0
 
 # data/ and archive/ are not in git: on a fresh deploy logging and the fallback move would fail
@@ -125,7 +126,17 @@ archive_to_git() {
 	printf '%s\n' "${output}" >"${ARCHIVE_PUSH_FLAG}"
 }
 
-for FILE_PATH in "${IN_DIR}"/!(~\$*).csv; do
+# A copy that stopped mid-way lacks the end every complete export of its type has: a CSV ends with
+# a newline, an xlsx (a zip) has its end record in the last 64 KB, a PDF '%%EOF' in the last 1 KB
+upload_complete() {
+	case "${FILENAME,,}" in
+	*.csv) [[ -z "$(tail -c 1 "${FILE_PATH}")" ]] ;;
+	*.xlsx) tail -c 65536 "${FILE_PATH}" | LC_ALL=C grep -qaF -e $'PK\x05\x06' ;;
+	*.pdf) tail -c 1024 "${FILE_PATH}" | LC_ALL=C grep -qaF -e '%%EOF' ;;
+	esac
+}
+
+for FILE_PATH in "${IN_DIR}"/!(~\$*).@(csv|xlsx|pdf); do
 	FILENAME="${FILE_PATH##*/}"
 
 	# Avoid processing files still being uploaded; the next cron run retries.
@@ -136,9 +147,8 @@ for FILE_PATH in "${IN_DIR}"/!(~\$*).csv; do
 	if ((UNCHANGED_SECONDS < UPLOAD_SETTLE_SECONDS)); then
 		continue
 	fi
-	# A copy that stopped mid-way usually ends mid-line; bank exports end with a
-	# newline. After a while, process anyway so a truly broken file gets reported.
-	if [[ -n "$(tail -c 1 "${FILE_PATH}")" ]] && ((UNCHANGED_SECONDS < INCOMPLETE_LINE_GRACE_SECONDS)); then
+	# After a while, process anyway so a truly broken file gets reported.
+	if ! upload_complete && ((UNCHANGED_SECONDS < INCOMPLETE_UPLOAD_GRACE_SECONDS)); then
 		continue
 	fi
 

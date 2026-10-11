@@ -29,11 +29,11 @@ tool in a private repo classifies the rest through Firefly's API.
 ## Idle cost (hard rule)
 
 The cron job runs every minute, so an idle run must cost next to nothing. Until there is
-work (a CSV in `data/incoming/` or `data/normalized/`, a pending `firefly-recalculate.flag`
-or `archive-push-pending.flag`), `firefly-iii-feeder.bash` uses bash builtins only: no
-subshell, no external command, no Python, no file write. Every new check goes after that exit.
-Excel's lock files (`~$<name>.csv`, left next to a CSV opened through the share) are no work:
-bash and the importer skip them.
+work (an export — csv, xlsx, pdf — in `data/incoming/`, a CSV in `data/normalized/`, a pending
+`firefly-recalculate.flag` or `archive-push-pending.flag`), `firefly-iii-feeder.bash` uses bash
+builtins only: no subshell, no external command, no Python, no file write. Every new check goes
+after that exit. Excel's lock files (`~$<name>.csv`, `~$<name>.xlsx`, left next to a file opened
+through the share) are no work: bash and the importer skip them.
 
 Measured on truenas-master: 1.9 ms CPU per idle run (bash alone: 1.8 ms); starting Python
 with the importer's imports costs 60 ms and 17 MB, 30 times as much. Re-measure after
@@ -84,11 +84,11 @@ into the parser (`debug_row` shows where a row gets stuck).
 | [engine/firefly/](engine/firefly/) | Firefly III import: `api` (REST client), `import_normalized` (importer), `accounts` (the own accounts file) |
 | [deploy/](deploy/) | Source of root-side helper scripts; installed by hand on each server, never run from here (see "Root helper") |
 | [config/](config/) | `<bank>.yaml` configs (bank name is the filename) + `app.env` (server only, see "Setup") + [accounts.example.yaml](config/accounts.example.yaml) (template of the own accounts file, no bank config) |
-| [firefly-iii-feeder.bash](firefly-iii-feeder.bash) | Cron entry: normalizes each incoming CSV, imports, commits and pushes `archive/` |
+| [firefly-iii-feeder.bash](firefly-iii-feeder.bash) | Cron entry: normalizes each incoming export, imports, commits and pushes `archive/` |
 | [start-over.bash](start-over.bash) | Wipes Firefly's transactions and reloads the archive (see "Start Over") |
 | `archive/` | Private git repo (server only, not in this repo): every export dropped in `incoming/`, in `originals/<bank>/<account>/` (finished) or `unprocessed/` (rejected, crashed); `accounts.yaml`, the own accounts (architectural_patterns.md §14) |
 | `bank-csv-originals/` | Exports from before the archive, one subfolder per bank: `Fintro/` is in the archive too, `Argenta/` (xlsx, pdf) enters it once the feeder reads those |
-| `data/incoming/` | Drop CSVs here to trigger processing |
+| `data/incoming/` | Drop exports (csv, xlsx, pdf; any case) here to trigger processing; one no bank config recognizes goes to `archive/unprocessed/` with an alert |
 | `data/normalized/` | Normalized output waiting for import: `<base>-normalized[-partial].csv` |
 | `data/imported/` | Normalized files after import: `<base>-imported.csv` (`-imported-partial` if any row of the bank file failed, in the normalizer or the import) |
 | `data/failed-rows/` | Rows that failed normalization, dedup, or import: `<base>-normalize-failed.csv`, `-duplicate-failed.csv`, `-import-failed.csv` |
@@ -129,7 +129,7 @@ feeder folder runs as that user (`sudo -H -u <cron user> …`; without `-H` git 
 ./firefly-iii-feeder.bash
 
 # Normalizer only (debugging)
-PYTHONPATH=. python3 -m engine.process_csv <csv_path> <run> <logfile_path>   # <run>: YYYYMMDD-HHMMSS-NNN
+PYTHONPATH=. python3 -m engine.process_csv <file> <run> <logfile_path>   # <run>: YYYYMMDD-HHMMSS-NNN
 
 # Why a row fails or is skipped; on the server (the row state is in data/), reads only.
 # <row>: the "source row" of the normalizer log, or an external_id (also finds filtered rows)

@@ -60,10 +60,15 @@ def load_engine(root: str):
 
 def read_file(root: str, csv_runtime, csv_validation, configs: dict, path: str):
     """Validated rows, bank config and bank module of one file, as process_csv reads it."""
-    raw_rows = csv_runtime.load_csv_rows(path)
+    # A version from before load_rows reads only CSV, numbering its lines itself
+    if hasattr(csv_runtime, "load_rows"):
+        raw_rows, source_lines, _ = csv_runtime.load_rows(path, configs)
+        prepare_args = (source_lines,)
+    else:
+        raw_rows, prepare_args = csv_runtime.load_csv_rows(path), ()
     bank_cfg = csv_validation.autodetect_bank(raw_rows, configs)
     bank = import_from(root, f"engine.banks.{bank_cfg['bank']}")
-    return csv_validation.validate_and_prepare(raw_rows, bank_cfg)[0], bank_cfg, bank
+    return csv_validation.validate_and_prepare(raw_rows, bank_cfg, *prepare_args)[0], bank_cfg, bank
 
 
 def row_identity(csv_validation, row: dict, bank_cfg: dict, where: str) -> str:

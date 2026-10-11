@@ -7,11 +7,14 @@ from typing import Any
 # Validate CSV structure
 # ---------------------------------------------------------------------------
 def validate_and_prepare(
-    csv_rows: list[dict[str, str]], bank_config: dict[str, Any]
+    csv_rows: list[dict[str, str]], bank_config: dict[str, Any], source_lines: list[str] | None = None
 ) -> tuple[list[dict[str, Any]], dict[str, str], Counter[str]]:
     """
     Validate CSV structure, apply filtering rules, and map CSV column names
     to internal field names based on the bank configuration.
+
+    Each row keeps its place in the file as the text "_source_line": source_lines[i]
+    (from load_rows), else the CSV line "2", "3", ... (header = line 1).
 
     Returns:
         (validated_rows, column_map, filtered)
@@ -68,7 +71,9 @@ def validate_and_prepare(
     validated_rows: list[dict[str, str]] = []
     filtered: Counter[str] = Counter()
 
-    for source_line, raw_row in enumerate(csv_rows, start=2):  # start=2: row 1 is the header
+    if source_lines is None:
+        source_lines = [str(line) for line in range(2, len(csv_rows) + 2)]
+    for source_line, raw_row in zip(source_lines, csv_rows, strict=True):
         mapped_row: dict[str, Any] = map_row(raw_row, column_map)
 
         filtered_column = filtered_by(mapped_row, bank_config)

@@ -15,7 +15,7 @@ from engine.core.csv_runtime import (
     describe_output,
     ensure_writer,
     load_all_bank_configs,
-    load_csv_rows,
+    load_rows,
     output_paths,
     write_failed_row,
 )
@@ -128,9 +128,18 @@ def main() -> None:
         bank_configs = load_all_bank_configs(CONFIG_DIR)
 
         # -----------------------------------------------------------------
-        # Load CSV
+        # Load the export (CSV, xlsx, or PDF through a bank's reader)
         # -----------------------------------------------------------------
-        csv_rows: list[dict[str, Any]] = load_csv_rows(csv_file_path)
+        try:
+            csv_rows, source_lines, stated_period = load_rows(csv_file_path, bank_configs)
+        except ValueError as exc:
+            completion.finalize(
+                context,
+                exit_code=65,
+                outcome="structure_failed",
+                message=f"FILE NOT READABLE: {exc}",
+            )
+            return
         log_event(logfile_path, f"Loaded {len(csv_rows)} raw rows")
 
         if not csv_rows:
@@ -167,7 +176,7 @@ def main() -> None:
         # -----------------------------------------------------------------
         # Validate + map + filter rows
         # -----------------------------------------------------------------
-        validated_rows, column_map, filtered = validate_and_prepare(csv_rows, bank_cfg)
+        validated_rows, column_map, filtered = validate_and_prepare(csv_rows, bank_cfg, source_lines)
         if filtered:
             reasons = ", ".join(f"{count}x {reason}" for reason, count in filtered.most_common())
             log_event(logfile_path, f"Filtered {sum(filtered.values())} rows: {reasons}")
@@ -235,10 +244,14 @@ def main() -> None:
         paths["row_state_csv"] = os.path.join(paths["row_state_dir"], state_filename(partition_value or bank_name))
 
         # -----------------------------------------------------------------
-        # Name every output after its content: bank, account, period
+        # Name every output after its content: bank, account, period. A
+        # statement's own printed period, else the span of its rows' dates
         # -----------------------------------------------------------------
-        date_format = bank_cfg["columns"]["required"].get("primary_transaction_date", {}).get("date_format")
-        first_date, last_date = transaction_period(valid_rows, date_format)
+        if stated_period:
+            first_date, last_date = stated_period
+        else:
+            date_format = bank_cfg["columns"]["required"].get("primary_transaction_date", {}).get("date_format")
+            first_date, last_date = transaction_period(valid_rows, date_format)
         base = describe_output(run_id, bank_name, partition_value, first_date, last_date)
         paths.update(output_paths(DATA_DIR, base))
         # Account folder as in row_key: the account, or the bank without partition_by

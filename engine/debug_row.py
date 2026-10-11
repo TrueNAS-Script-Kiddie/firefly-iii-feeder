@@ -9,8 +9,9 @@ Usage (on the server, where the row state is; reads only, writes nothing):
   PYTHONPATH=. python3 -m engine.debug_row <file> <row> [<row> ...]
 
 <row> is the source row as the normalizer log names it ("source row 17": the
-line in the CSV, the header is line 1), or a value of external_id, e.g. a
-Fintro Volgnummer like 2019-00135 (also matches filtered rows, such as pending ones).
+line in a CSV or the row in an xlsx, the header is 1; "p3/12": page and line of
+a PDF), or a value of external_id, e.g. a Fintro Volgnummer like 2019-00135
+(also matches filtered rows, such as pending ones).
 """
 
 import importlib
@@ -18,7 +19,7 @@ import os
 import sys
 from collections.abc import Callable
 
-from engine.core.csv_runtime import load_all_bank_configs, load_csv_rows
+from engine.core.csv_runtime import load_all_bank_configs, load_rows
 from engine.core.csv_validation import (
     autodetect_bank,
     extract_duplicate_key,
@@ -116,17 +117,16 @@ def main() -> int:
     name = os.path.basename(path)
 
     try:
-        raw_rows = load_csv_rows(path)
-        bank_cfg = autodetect_bank(raw_rows, load_all_bank_configs(os.path.join(BASE_DIR, "config")))
-        validated_rows, column_map, _ = validate_and_prepare(raw_rows, bank_cfg)
+        bank_configs = load_all_bank_configs(os.path.join(BASE_DIR, "config"))
+        raw_rows, source_lines, _ = load_rows(path, bank_configs)
+        bank_cfg = autodetect_bank(raw_rows, bank_configs)
+        validated_rows, column_map, _ = validate_and_prepare(raw_rows, bank_cfg, source_lines)
     except ValueError as exc:
         print(f"{name}: {exc}")
         return 1
     print(f"{name}: bank {bank_cfg['bank']}, {len(raw_rows)} rows\n")
 
-    # Source row per raw row, as validate_and_prepare numbers them (header = 1)
-    source_lines = [str(line) for line in range(2, len(raw_rows) + 2)]
-    validated_by_line = {str(row["_source_line"]): row for row in validated_rows}
+    validated_by_line = {row["_source_line"]: row for row in validated_rows}
     external_id_column = column_map.get("external_id")
     states: dict = {}  # row-state path -> loaded state, read once
 

@@ -1,6 +1,6 @@
 """
 CSV runtime helpers:
-- CSV loading (encoding + delimiter detection)
+- Loading an export: CSV (encoding + delimiter detection), xlsx, or PDF through a bank's reader
 - Writer creation
 - Failed-row writing
 - Bank config loading
@@ -12,11 +12,14 @@ Nothing more, nothing less.
 
 import codecs
 import csv
+import importlib
 import os
 import re
 from typing import Any
 
 import yaml
+
+from engine.core.xlsx_reader import read_xlsx
 
 # A name starting with a run id is a copy from the archive (start-over): it keeps the run id
 # of its first arrival, so a reload processes the files in their original order
@@ -106,8 +109,54 @@ def describe_output(run_id: str, bank: str, account: str, first_date: str, last_
 
 
 # ---------------------------------------------------------------------------
-# Load CSV
+# Load an export
 # ---------------------------------------------------------------------------
+def load_rows(
+    path: str, bank_configs: dict[str, dict[str, Any]]
+) -> tuple[list[dict[str, str]], list[str], tuple[str, str] | None]:
+    """
+    Read an export by its extension into (rows, source_lines, period):
+    - rows: dicts under the file's own column names
+    - source_lines: one text per row naming where it is in the file ("17", "p3/12")
+    - period: (first, last) ISO dates when the file states its own period (a statement), else None
+
+    A PDF is read by the bank whose config names a `reader`: the module
+    engine.banks.<bank>.<reader>, whose read(path) returns that same tuple, or None
+    when the file is not its own.
+
+    Raises ValueError when the file cannot be read.
+    """
+    extension = os.path.splitext(path)[1].lower()
+    if extension == ".csv":
+        rows = load_csv_rows(path)
+        return rows, [str(line) for line in range(2, len(rows) + 2)], None  # header = line 1
+    if extension == ".xlsx":
+        return (*read_xlsx(path), None)
+    if extension == ".pdf":
+        return read_with_bank_reader(path, bank_configs)
+    raise ValueError(f"Unsupported file type '{extension}': csv, xlsx or pdf")
+
+
+def read_with_bank_reader(
+    path: str, bank_configs: dict[str, dict[str, Any]]
+) -> tuple[list[dict[str, str]], list[str], tuple[str, str] | None]:
+    readers = {bank: cfg["reader"] for bank, cfg in sorted(bank_configs.items()) if cfg.get("reader")}
+    results = {}
+    for bank, reader in readers.items():
+        result = importlib.import_module(f"engine.banks.{bank}.{reader}").read(path)
+        if result is not None:
+            results[bank] = result
+    if not results:
+        tried = ", ".join(f"{bank}.{reader}" for bank, reader in readers.items()) or "no bank config names a reader"
+        raise ValueError(f"No bank reader recognizes this PDF ({tried})")
+    if len(results) > 1:
+        raise ValueError(f"Ambiguous PDF: recognized by several bank readers: {sorted(results)}")
+    bank, (rows, source_lines, period) = next(iter(results.items()))
+    if len(source_lines) != len(rows):
+        raise ValueError(f"Reader of {bank} returned {len(rows)} rows but {len(source_lines)} source lines")
+    return rows, source_lines, period
+
+
 class SemicolonDialect(csv.excel):
     """Fallback dialect; a subclass, so the shared csv.excel stays untouched."""
 
