@@ -1,7 +1,7 @@
 # Plan 02 — Argenta
 
-Status: **approved; to be carried out after [plan 01](01-core-fintro-firefly.md)**, which brings
-the regression test and `debug_row` for every bank, the accounts file and the first start-over.
+Status: **approved; next.** It builds on the regression test and `debug_row` for every bank and
+on the own accounts file (architectural_patterns.md §14).
 Examples are made up (public repo); real rows stay in the terminal.
 
 Hard requirement for every step: **an idle run stays free** (AGENTS.md "Idle cost").
@@ -84,7 +84,7 @@ Established in the data:
    ⏰ **Remind**: the user is still trying to get the older statements from Argenta; ask before
    the reload (§4). If they come, this opening balance and this limitation fall away.
 8. ✅ **`Referentie` date check** (point 0.3): the row fails if code and booking date differ.
-9. ✅ **Foreign currency** (mechanism: plan 01):
+9. ✅ **Foreign currency** (mechanism: `foreign_amount` / `foreign_currency_code`, docs/output-contract.md):
    - Card PDF: `10,80-USD` + `1 EUR=1,0800000 USD` → 10.80 ÷ 1.08 = 10.00 = EUR amount (made
      up), otherwise the line fails.
    - Argenta xlsx, old layout: only the currency, no amount → note only; Firefly does not accept
@@ -350,7 +350,7 @@ parsing.
 
 ### Step 5 — Documentation
 
-In the structure of plan 01 step 0:
+In the existing structure (per-bank README, `docs/output-contract.md`):
 
 - **`engine/banks/argenta/README.md`** (fixed headings) for the accounts and the card
   statements:
@@ -410,7 +410,8 @@ the Argenta import adds a transfer next to them → **counted twice**.
    - the Firefly balance of every Argenta account = the balance in the Argenta app today;
    - card balance = the last `Nieuw saldo`;
    - every own transfer appears exactly once;
-   - the combined Rabobank account ends on 0 (its closing transfer to Argenta, plan 01 step 7.4);
+   - the combined Rabobank account ends on 0 (its closing transfer to Argenta is in the Argenta
+     export; the correction in the accounts file is only the rest);
    - nothing in `archive/unprocessed/`.
 
 Takes about an hour (~14,000 Fintro rows in batch + ~750 Argenta rows).
