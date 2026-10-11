@@ -11,7 +11,8 @@ Designed for unattended cron execution on TrueNAS or any Linux host.
 - Auto-detects the bank by matching CSV headers against YAML configs
 - Validates, filters and normalizes each row
 - Deduplicates via a per-account row state, which also records each row's Firefly transaction
-- Imports the normalized rows into Firefly III via its REST API
+- Imports the normalized rows into Firefly III via its REST API, after setting Firefly's own
+  accounts to the accounts file in the archive
 - Keeps every export it received in `archive/`, a private git repo pushed to
   its own remote, so Firefly can always be wiped and reloaded with one command
   (`start-over.bash`; see [docs/archive-and-reload.md](docs/archive-and-reload.md))
@@ -40,18 +41,20 @@ firefly-iii-feeder/
 │   ├── banks/
 │   │   └── fintro/                # Per-bank package: README (export, parsing),
 │   │                              # normalize, extract_details, parsers, reconcile, debug_trace
-│   └── firefly/                   # api (REST client), import_normalized
+│   └── firefly/                   # api (REST client), import_normalized, accounts
 ├── docs/
 │   ├── output-contract.md         # What other tools may rely on
 │   └── archive-and-reload.md      # The archive, start-over.bash, setup, restore
 ├── plans/                         # Work in progress; removed once done
 ├── config/
 │   ├── fintro.yaml                # Per-bank config (columns, regex, dedup)
+│   ├── accounts.example.yaml      # Template of archive/accounts.yaml (own accounts)
 │   └── app.env                    # FIREFLY_URL, FIREFLY_TOKEN (server only)
 ├── deploy/                        # Root helper script (installed by hand, see AGENTS.md)
 ├── archive/                       # Private git repo (server only): every export received
 │   ├── originals/<bank>/<account>/
-│   └── unprocessed/               # Rejected or crashed
+│   ├── unprocessed/               # Rejected or crashed
+│   └── accounts.yaml              # Own accounts, applied to Firefly by the importer
 ├── bank-csv-originals/            # Exports from before the archive
 ├── data/                          # Disposable: remade by a reload
 │   ├── incoming/ normalized/ imported/ failed-rows/

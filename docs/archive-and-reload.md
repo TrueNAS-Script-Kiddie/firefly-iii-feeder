@@ -13,6 +13,7 @@ Forgejo. It is kept out of this public repo (`.gitignore`) and out of the SFTP w
 archive/
   originals/<bank>/<account>/<run>-<first>_<last>-<sha8>.<ext>   finished by the normalizer
   unprocessed/<run>-<source name>                                not finished
+  accounts.yaml                                                  own accounts (architectural_patterns.md §14)
   .gitignore                                                     Thumbs.db, desktop.ini, ~$* (Office lock files)
 ```
 
@@ -53,7 +54,8 @@ archive/
    - `archive/.git` missing: alert "ARCHIVE NOT UNDER GIT" in every run with work; the files are
      still archived.
 8. **`config/app.env` holds only what can be remade without git**: `FIREFLY_URL` and
-   `FIREFLY_TOKEN` (a new token in Firefly). Everything else a reload needs belongs in the archive.
+   `FIREFLY_TOKEN` (a new token in Firefly). Everything else a reload needs belongs in the archive,
+   the own accounts too (`accounts.yaml`).
 9. **One feeder at a time** (truenas-master only): the archive has one writer.
 10. **The share writes as the cron user.** Files dropped through the share belong to the user the
     cron job runs as, so git and the feeder can move and commit each other's files. If the share
@@ -214,8 +216,16 @@ one dropped again is recognized by its `<sha8>` and not archived twice.
 When to use it, and what to do first: AGENTS.md "Start Over". From the root shell on the server:
 
 ```bash
-sudo -H -u <cron user> bash <app-ds>/firefly-iii-feeder/start-over.bash
+sudo -H -u <cron user> bash <app-ds>/firefly-iii-feeder/start-over.bash [--wipe-accounts]
 ```
+
+- **Default**: the own accounts stay, with their opening balances, piggy banks and recurring
+  transactions (`destroy?objects=transactions` spares opening balances). The first cron run
+  applies `accounts.yaml`, which sets every listed account to the file.
+- **`--wipe-accounts`**: also `destroy?objects=asset_accounts`, after the expense/revenue accounts
+  and before the purge. It deletes every own account, credit cards included, with its opening
+  balance, piggy banks and recurring transactions; the first cron run creates the accounts again
+  from `accounts.yaml`, with new Firefly ids.
 
 Started with `bash`: git keeps it as `100644` and SFTP sets no execute bit.
 
@@ -227,23 +237,24 @@ sequenceDiagram
     participant D as data/
     participant A as archive
     participant C as cron
-    U->>S: bash start-over.bash, type WIPE
+    U->>S: bash start-over.bash [--wipe-accounts], type WIPE
     S->>S: take the cron lock (waits for a running run)
     S->>A: commit pending changes (e.g. a hand fix), push
-    S->>F: destroy transactions + expense/revenue accounts, purge
+    S->>F: destroy transactions + expense/revenue accounts<br/>(--wipe-accounts: + own accounts), purge
     S->>D: data/ → data-before-start-over/ (previous one deleted),<br/>files waiting in incoming/ go back in
     S->>D: archive's unprocessed/ then originals/ → incoming/ (copies, flat)
     S->>S: release the lock
     loop every minute, oldest #lt;run#gt; first
-        C->>F: normalize + import
+        C->>F: apply accounts.yaml (first run), normalize + import
         C--xA: nothing new, except a rejected file that now succeeds
     end
 ```
 
 1. Refuses to run as anyone but the owner of the feeder folder: a root-owned file in `data/` or
    `archive/` breaks the cron job.
-2. Stops before asking when `app.env` lacks URL or token, `archive/` has no `.git`, or
-   `originals/` is empty (a wipe with nothing to load back).
+2. Stops before asking when `app.env` lacks URL or token, `archive/` has no `.git`,
+   `originals/` is empty (a wipe with nothing to load back), or `--wipe-accounts` is given without
+   `accounts.yaml` (nothing would create the accounts again). The banner says what goes.
 3. Pushes right after its commit, also with nothing to commit. A failed push only shows on screen
    and puts the push flag in the new `data/`, so cron retries silently; the commits are safe
    locally.
@@ -260,8 +271,9 @@ that still fails alerts again and stays in `unprocessed/`. The reload takes abou
 
 **Not restored** by a start-over:
 - `config/app.env` and the rest of the one-time setup (AGENTS.md "Setup").
-- Own (asset) accounts: they are not wiped, and not in the archive either; the importer needs them
-  with their IBANs. A new Firefly needs them created by hand first.
+- Own accounts: not restored but repaired from `accounts.yaml` (default), or rebuilt from it
+  (`--wipe-accounts`). After `--wipe-accounts` their piggy banks and recurring transactions are
+  gone, and the accounts have new Firefly ids.
 - Classification: rules, categories and tags stay in Firefly but no longer hold any transaction.
 - Anything entered by hand in Firefly: every transaction and every expense/revenue account is
   wiped, not only what the feeder created.
@@ -291,8 +303,9 @@ The archive repo; the rest of the one-time setup is in AGENTS.md "Setup". Every 
 
 ## Restore on a new server
 
-1. AGENTS.md "Setup", every step but the archive repo: Firefly, the own accounts with their IBANs,
-   `config/app.env` with a new token, the feeder folder, the root helper, the cron job.
+1. AGENTS.md "Setup", every step but the own accounts and the archive repo: Firefly,
+   `config/app.env` with a new token, the feeder folder, the root helper, the cron job. The own
+   accounts come from `accounts.yaml` in the cloned archive.
 2. Setup steps 1–3 above; then, instead of `git init`, clone the archive and give the clone the
    same `.git/config` entries as step 4:
 

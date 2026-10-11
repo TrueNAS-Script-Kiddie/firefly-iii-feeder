@@ -330,7 +330,7 @@ parsing.
        run that leaves a file waiting (still uploading) skips the check, and the run that
        processes that file does it. Off the idle path, like everything after the idle exit.
      - A difference that stays alerts again at every run that processes a file: once per drop,
-       as with an account missing from the accounts file (plan 01 step 5).
+       as with an account missing from the accounts file (architectural_patterns.md §14).
      - By hand, for `debug_row`-like inspection: `PYTHONPATH=. python3 -m engine.archive_checks --print`
        runs the same checks and prints instead of alerting.
 
@@ -340,7 +340,7 @@ parsing.
      never changes, and two identical lines each get their own key that way.
    - `partition_by` = customer reference.
    - The reader returns the printed period `from … to …` as `period` (step 1, §1.11).
-6. Importer (`engine/firefly/import_normalized.py`), with the accounts file of plan 01 step 5:
+6. Importer (`engine/firefly/import_normalized.py`), with the accounts file (architectural_patterns.md §14):
    - `is_card_repayment` at the end of `NORMALIZED_FIELDNAMES`;
    - `paid_from` in the accounts file (template, validation: credit cards only);
    - `build_split`: a row with `is_card_repayment=1` gets the `paid_from` of its own account as
@@ -392,7 +392,7 @@ Needed because the Fintro rows to Argenta (point 0.12) are now expenses/income: 
 the Argenta import adds a transfer next to them → **counted twice**.
 
 1. ⏰ Ask about §1.7 first (older card statements).
-2. Add to `archive/accounts.yaml`, through a dry-run as in plan 01 step 5:
+2. Add to `archive/accounts.yaml`, through a dry-run (AGENTS.md "Running"):
    - the Argenta current and savings accounts;
    - the Argenta Mastercard (§1.3), with `paid_from` (§1.2) and its opening balance (§1.7);
    - the term deposit (§1.4).

@@ -1,7 +1,7 @@
 # Plan 01 — Core, Fintro and Firefly setup
 
-Status: **in progress — steps 0 to 4 done; step 5 carried out and checked on the server, not
-committed yet (review); next: step 6.** To be carried out before
+Status: **in progress — steps 0 to 5 done; step 6 carried out, not committed yet (review);
+next: step 7.** To be carried out before
 [plan 02 (Argenta)](02-argenta.md).
 Nothing here is Argenta-specific, but plan 02 builds on it. Examples are made up (public
 repo); real rows stay in the terminal.
@@ -66,10 +66,11 @@ finance tool (private repo); what is one-off per server or impossible via the AP
 ## 3. Steps (order = commits)
 
 Every step: `pre-commit`, regression test (AGENTS.md "Testing"). On Fintro every step gives zero
-differences. Each step updates the docs it makes wrong; step 6 lists what is left.
+differences. Each step updates the docs it makes wrong.
 
 Done; their lasting facts are in AGENTS.md, architectural_patterns.md, the Fintro README,
-`docs/output-contract.md` and the docstrings of `engine/regression.py` and `engine/debug_row.py`:
+`docs/output-contract.md`, `docs/archive-and-reload.md`, `config/accounts.example.yaml` and the
+docstrings of `engine/regression.py`, `engine/debug_row.py` and `engine/firefly/accounts.py`:
 
 - **Step 0** — documentation reorganized: per-bank README, output contract (`781da6a`).
 - **Step 1** — file names in `data/` describe bank, account and period (`5a01be5`).
@@ -81,239 +82,11 @@ Done; their lasting facts are in AGENTS.md, architectural_patterns.md, the Fintr
   `engine/debug_row.py` with an optional per-bank `debug_trace.py` (Fintro's: the details
   steps). Checked: Fintro 0 differences and the same unique rows as before; on the server
   `debug_row` shows what the old Fintro script showed.
-
-### Step 5 — Own accounts via a file
-
-**Carried out** (not committed yet): `engine/firefly/accounts.py` (reading, checking, applying),
-the importer's `--accounts-only` / `--accounts`, `start-over.bash --wipe-accounts`, the template
-`config/accounts.example.yaml`. Regression test: Fintro 0 differences. Tested against a simulated
-Firefly (create, update, unlisted alert, corrections, dry run, invalid file) and `start-over.bash`
-in a throwaway copy with a stub `curl`. Server check done (below).
-
-As built, beyond the design below (for step 6 to document):
-
-- `load_all_bank_configs` skips `*.example.yaml`: the template sits in `config/`, where every
-  other `.yaml` is a bank config.
-- Two more fields: `notes` (Firefly's account notes) and `key`, required for an account with
-  neither `iban` nor `account_number` (a cash wallet) and refused otherwise. The key is kept as
-  the last line of the notes, `firefly-iii-feeder key: <key>`, and finds the account again, also
-  after a rename; an existing account without that line is found once by its name (Firefly
-  keeps asset account names unique), and the update adds the line. An unknown field is refused; an
-  `account_number` of only digits must be quoted (YAML drops leading zeros). Names and
-  identifiers are unique across the file.
-- The whole file is checked before Firefly is contacted: an invalid file sends nothing, also
-  with `--accounts-only`.
-- An opening balance of 0 is no opening balance (Firefly keeps none for 0).
-- On a difference the update sends every field of the account, not only the changed ones:
-  Firefly checks some only together (a credit card's payment date with its role).
-- Changes go to `data/logs/<time>-firefly-accounts.log`, written only when something changes;
-  each import log's first line says `accounts file: 1 accounts created, …` or
-  `nothing to change`. `--accounts-only` also prints them.
-- Unlisted own accounts: alert `FIREFLY OWN ACCOUNTS NOT IN THE ACCOUNTS FILE`, with name, IBAN,
-  account number and Firefly id.
-- `--accounts-only` leaves the flags alone (it is run by hand); exit 69 when blocked, 2 when the
-  file is missing. Without `--accounts`, a missing `archive/accounts.yaml` is fine for an import.
-- A correction: amount + → deposit from the counterparty, − → withdrawal to it; notes
-  `Correction from the accounts file`; Firefly's rules are applied to it, as to imported rows.
-
-Checked in Firefly's source (6.7.8), the two open questions of the design:
-
-- An own account whose IBAN is already on an expense or revenue account is refused (`UniqueIban`
-  allows an asset IBAN on no other asset, expense or revenue account). The refusal blocks the
-  import like any other; its alert says that `start-over.bash` removes those accounts before the
-  file is applied. The same holds for `account_number`.
-- `internal_reference_starts:correction|` works: the search parser treats `|` as a plain
-  character, and it is no wildcard in the SQL `LIKE` the operator becomes.
-
-Design:
-
-Now you create accounts by hand in the Firefly GUI. New: you describe them once in
-`archive/accounts.yaml`, and the feeder makes Firefly match it.
-
-**When it is applied**
-
-- **At the start of every run that imports** (`import_normalized` with files to import), before
-  it reads Firefly's asset accounts. A new account only matters together with the export that
-  needs it, so cron gets no extra check.
-- **By hand**, to apply or try a change without an export, as the cron user:
-
-  ```bash
-  PYTHONPATH=. python3 -m engine.firefly.import_normalized --accounts-only [--accounts <path>] [--dry-run]
-  ```
-
-  `--accounts-only` applies the file and imports nothing. `--accounts <path>` reads another file
-  than `archive/accounts.yaml`. `--dry-run` shows what it would create, update or delete, and
-  sends nothing. To change the file safely: write a draft as `data/accounts-draft.yaml` through
-  the share (`data/` is not in git), dry-run it with `--accounts data/accounts-draft.yaml`, then
-  copy it over `archive/accounts.yaml`. The next run with work commits it with the archive.
-- **No file**: nothing is applied, Firefly's accounts are used as they are.
-
-**What applying does**
-
-- Account found in Firefly by its `iban`, else its `account_number`: missing → created; a field
-  that differs → updated. Nothing is ever deleted. The file is the truth: a GUI change to a
-  listed account is overwritten.
-- An own account in Firefly that the file does not list: an alert, in every run that imports,
-  until it is in the file or deleted. Every own account belongs in the file, and a run imports
-  only when an export was dropped, so this is one mail per drop, not one per minute.
-- **Invalid file, or Firefly refuses an account**: handled as "Firefly unreachable" (exit 69,
-  architectural_patterns §11): nothing is imported, files stay in `data/normalized/`, one alert
-  through the existing `firefly-import-blocked.flag`, retried every minute while files wait; it
-  clears once the file is fixed. The alert names the file, the account and the reason.
-- **Correction bookings** are ordinary transactions, without a row state. Each gets
-  `internal_reference` = `correction|<account>|<sha8>`:
-  - `<account>` = the account's IBAN, else its account number, without spaces;
-  - `<sha8>` = the first 8 hex digits of the SHA-256 of `<date>|<amount>|<counterparty>|<description>`.
-
-  On every apply the feeder fetches the transactions whose `internal_reference` starts with
-  `correction|` (Firefly search operator `internal_reference_starts`). Not in the file → deleted.
-  In the file but not in Firefly → created. A changed correction has a new key, so its old version
-  is deleted and the new one created. After deleting, `DELETE /api/v1/data/purge`: Firefly's
-  duplicate check includes deleted transactions (AGENTS.md "Firefly III Import").
-- **Opening balance**: sent as the account fields `opening_balance` + `opening_balance_date`;
-  Firefly keeps it as a booking of its own type.
-- **Start-over and own accounts.** Checked in Firefly's source:
-  - `destroy?objects=transactions` (today's wipe) spares opening balances;
-  - `destroy?objects=asset_accounts` deletes every asset account (credit cards included) with
-    its opening balance, its piggy banks and its recurring transactions.
-
-  So `start-over.bash` gets two modes:
-  - **default**: the own accounts stay, with their piggy banks and recurring transactions. The
-    first cron run applies the file, which repairs every listed account: missing ones are
-    created, opening balances and other fields set to the file.
-  - **`--wipe-accounts`**: also `destroy?objects=asset_accounts`, between the expense/revenue
-    accounts and the purge. The first cron run then creates every account again from the file.
-    In this mode the script stops before asking when `archive/accounts.yaml` is missing, and its
-    banner says that piggy banks and recurring transactions go too.
-
-  After `--wipe-accounts` the accounts have new Firefly ids: the private finance tool must find
-  accounts by IBAN or name, never by id.
-- **Closed accounts** (`active: false`): checked in Firefly's source. `GET accounts?type=asset`
-  lists inactive accounts too, and a transaction may use one as source or destination by id. So
-  rows of a closed account still import, also at a reload.
-- **Credit card**: Firefly asks a full date for `monthly_payment_date` (only its day is used),
-  so the file holds a date too (template below).
-
-**Not in this public repo.** The repo gets a template `config/accounts.example.yaml` with all
-explanation and made-up accounts (English, like the rest of the repo). Your own file
-`archive/accounts.yaml` starts as a copy of it.
-
-Design of the template:
-
-```yaml
-# Own accounts in Firefly III, kept in line by firefly-iii-feeder.
-#
-# Applied at the start of every import run, or by hand:
-#   PYTHONPATH=. python3 -m engine.firefly.import_normalized --accounts-only [--accounts <path>] [--dry-run]
-#   - an account listed here but missing in Firefly is created;
-#   - a field that differs from Firefly is updated in Firefly;
-#   - no account is deleted (only start-over.bash --wipe-accounts does); an own account in
-#     Firefly that is not listed here gives an alert in every import run.
-# This file is the truth: a change made in the Firefly GUI to a listed account is overwritten.
-# An account is found in Firefly by its iban, else by its account_number.
-# An invalid file blocks the import (one alert); fix the file and the next run goes on.
-#
-# Fields (one list item per account). Between [brackets]: the field as Firefly's account form
-# shows it (English GUI; a translated GUI shows the translation).
-#   name                  Required. [Name]
-#   kind                  Required. What the account is. [Account role]
-#                           checking     current account                     [Default asset account]
-#                           savings      savings account or term deposit     [Savings account]
-#                           credit_card  credit card with its own statement  [Credit card]
-#                                        (needs monthly_payment_date)
-#                           cash         cash wallet                         [Cash wallet]
-#                         A debit card is not an account: it belongs to its checking account.
-#   shared                true for an account of more than one person (joint account).
-#                         Only with kind checking: the role becomes
-#                         [Shared asset account]. Default false.
-#   iban                  IBAN, spaces allowed. Bank rows are matched to the account on it. [IBAN]
-#   account_number        Second identifier, free text: an account without an IBAN (card
-#                         customer reference, term deposit number), or a second IBAN whose rows
-#                         belong on this same account. [Account number]
-#   monthly_payment_date  credit_card only: a date whose day is the day of the month the card
-#                         balance is debited. [Credit card monthly payment date]; the feeder also
-#                         sets [Credit card payment plan] to [Full payment every month].
-#   opening_balance       Balance just before the first imported row (negative for a card that
-#   opening_balance_date  was owed money). Both or neither. Default 0.
-#                         [Opening balance], [Opening balance date]
-#   active                false for a closed account. Default true. [Active]
-#   corrections           Bookings no export contains (e.g. interest of a closed account without
-#                         exports). Each: date, amount (+ in, - out), counterparty (name),
-#                         description. Ordinary transactions, not account fields. Applying the
-#                         file again books nothing twice; a changed or removed correction
-#                         replaces or removes the old one in Firefly.
-
-- name: ACME current account
-  kind: checking
-  iban: BE68 5390 0754 7034
-  opening_balance: 1234.56
-  opening_balance_date: 2016-01-01
-
-- name: ACME joint account
-  kind: checking
-  shared: true
-  iban: NL91ABNA0417164300
-
-- name: ACME Mastercard
-  kind: credit_card
-  monthly_payment_date: 2016-01-14
-  iban: DE89 3704 0044 0532 0130 00  # account the card balance is collected on: makes the
-                                     # monthly settlement from the current account a transfer
-  account_number: "1234567890"       # customer reference on the card statement
-
-- name: Old savings (closed)
-  kind: savings
-  iban: GB82 WEST 1234 5698 7654 32
-  account_number: GB33 BUKB 2020 1555 5555 55  # the bank's current account: its rows land here too
-  active: false
-  corrections:
-    - {date: 2020-12-31, amount: 123.45, counterparty: "Old bank", description: "Rest, presumably interest"}
-```
-
-Translation: what you write in the file, what you see in Firefly, what the feeder sends to the
-API (the API knows no other values). GUI names from Firefly's own text files
-(`resources/lang/en_US/firefly.php`, `form.php`); Firefly's Dutch translation is not in the
-source code, so those names were not checked.
-
-| `kind` (+ `shared`) | Firefly GUI, "Account role" | API `account_role` | Extra Firefly then asks for |
-|---|---|---|---|
-| `checking` | Default asset account | `defaultAsset` | — |
-| `checking` + `shared: true` | Shared asset account | `sharedAsset` | — |
-| `savings` (also term deposit) | Savings account | `savingAsset` | — |
-| `credit_card` | Credit card | `ccAsset` | payment plan "Full payment every month" (`credit_card_type: monthlyFull`), `monthly_payment_date` |
-| `cash` | Cash wallet | `cashWalletAsset` | — |
-
-"Debit" is not a kind of account but a card attached to a current account; in Firefly that card
-has no account of its own.
-
-Check (server, done): `--accounts-only --dry-run` on a draft holding every own account as it is
-in Firefly creates nothing and updates only what the draft deliberately changes (a role, notes,
-a key). Step 7 does the real test.
-
-### Step 6 — Documentation
-
-What step 5 leaves, in the structure of step 0:
-
-- **AGENTS.md**:
-  - "Running": `--accounts-only`;
-  - "Setup": step "Own (asset) accounts" becomes "write `archive/accounts.yaml`" (template
-    `config/accounts.example.yaml`);
-  - "Key Directories": `engine/firefly/` gets `accounts`; `config/` the template (no bank
-    config); `data/logs/` the `<time>-firefly-accounts.log`;
-  - "Adding a New Bank" step 1: a `*.example.yaml` is never a bank;
-  - "Exit Codes", importer: `--accounts-only` gives 69 when blocked, 2 without a file.
-- **README.md**: the project tree (`config/accounts.example.yaml`, `engine/firefly/accounts`).
-- **architectural_patterns.md** §13: the accounts file is applied before the Firefly state is
-  read; an invalid file blocks like an outage. §11: the blocked flag also covers that.
-- **docs/archive-and-reload.md**:
-  - the archive tree gets `accounts.yaml`;
-  - `start-over.bash` section: the diagram, the `--wipe-accounts` mode and its stop without
-    `accounts.yaml`;
-  - "Not restored": own accounts are repaired or rebuilt from the file now; after
-    `--wipe-accounts`, piggy banks and recurring transactions are gone;
-  - "Restore on a new server" step 1: no own accounts by hand.
-- **AGENTS.md "Start Over"**: own accounts repaired from the file; `--wipe-accounts`.
-- **docs/output-contract.md**: corrections and their `internal_reference`.
+- **Step 5** — own accounts from `archive/accounts.yaml` (architectural_patterns.md §14),
+  `--accounts-only`, `start-over.bash --wipe-accounts` (`66589a6`). Checked on the server: a
+  dry-run of a draft with every own account as it is in Firefly changes only what the draft
+  changes on purpose.
+- **Step 6** — documentation of step 5.
 
 ### Step 7 — Start over (on the server)
 
@@ -321,9 +94,10 @@ The first start-over since `9bc800f`. The server still has the old `data/duplica
 empty row state, so until now any export dropped in `data/incoming/` would store its rows a
 second time.
 
-1. Write `archive/accounts.yaml`: every Fintro account, the two Rabobank accounts of §1.8, and
-   their opening balances. Dry-run it as in step 5; it must create only the Rabobank accounts
-   and change nothing else.
+1. Write `archive/accounts.yaml`: the draft `data/accounts-draft.yaml` checked in step 5 (every
+   own account now in Firefly), plus the two Rabobank accounts of §1.8 and the opening balances.
+   Dry-run it (AGENTS.md "Running"); it must create only the Rabobank accounts and change only
+   what the draft changes on purpose.
 2. `start-over.bash --wipe-accounts` as the cron user (AGENTS.md "Start Over"): the first test
    of rebuilding every account from the file. The first cron run creates them, then loads the
    archive.
@@ -340,7 +114,7 @@ second time.
 1. Regression test after every step: Fintro zero differences.
 2. Server, only after step 7: a Fintro export via `data/incoming/` → check names, log and output
    in `archive/originals/`, `data/normalized/`, `data/logs/`; importer with `--dry-run`.
-3. Accounts file: always `--dry-run` first (step 5), then for real.
+3. Accounts file: always `--dry-run` first (AGENTS.md "Running"), then for real.
 4. Before every commit: scan the staged diff for IBAN-like strings and real names (public repo).
 
 ## 5. Later

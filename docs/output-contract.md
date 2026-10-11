@@ -81,6 +81,15 @@ A transfer between own accounts is stored once: it carries the fields of whichev
 imported first; the other side's `external_id`, `row_key` and `notes` stay in its `data/imported/`
 file only.
 
+**Corrections** from the accounts file (bookings no export contains; architectural_patterns.md §14)
+are transactions without a bank row: `internal_reference` = `correction|<account>|<sha8>`, notes
+`Correction from the accounts file`, no `external_id`. A changed correction is a new transaction
+with a new key; the old one is deleted.
+
+**Own accounts** are set from the accounts file and may get new Firefly ids at a start-over: find
+them by IBAN, account number or name, never by id. The last line of an account's notes may be the
+feeder's `firefly-iii-feeder key: <key>`.
+
 ## Changes
 
 | Date | Change |
@@ -88,3 +97,4 @@ file only.
 | 2026-10-09 | First version, describing the output as it is. |
 | 2026-10-09 | `booking_date` renamed `interest_date`, sent to Firefly's `interest_date` instead of `book_date`. New columns `foreign_amount`, `foreign_currency_code` (not yet sent to Firefly). |
 | 2026-10-09 | New columns `asset_account_number` and `row_key`, added at the end. Sent to Firefly: `foreign_amount` / `foreign_currency_code`, and `row_key` as `internal_reference`. Own accounts are found by IBAN or account number. |
+| 2026-10-11 | Own accounts and correction bookings come from the accounts file: corrections carry `internal_reference` `correction\|…`; own account ids may change at a start-over. |

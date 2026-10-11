@@ -81,19 +81,19 @@ into the parser (`debug_row` shows where a row gets stuck).
 | `plans/` | Plans for work in progress; once done, their lasting facts move into the docs and the plan is deleted (git keeps it) |
 | [engine/regression.py](engine/regression.py) | Regression test: every row of the bank exports through a git ref and the working tree, reporting each changed result |
 | [engine/debug_row.py](engine/debug_row.py) | Why a row fails or is skipped, for every bank; a bank adds its own trace in an optional `engine/banks/<bank>/debug_trace.py` (`show_trace(row)`) |
-| [engine/firefly/](engine/firefly/) | Firefly III import: `api` (REST client), `import_normalized` (importer) |
+| [engine/firefly/](engine/firefly/) | Firefly III import: `api` (REST client), `import_normalized` (importer), `accounts` (the own accounts file) |
 | [deploy/](deploy/) | Source of root-side helper scripts; installed by hand on each server, never run from here (see "Root helper") |
-| [config/](config/) | `<bank>.yaml` configs (bank name is the filename) + `app.env` (server only, see "Setup") |
+| [config/](config/) | `<bank>.yaml` configs (bank name is the filename) + `app.env` (server only, see "Setup") + [accounts.example.yaml](config/accounts.example.yaml) (template of the own accounts file, no bank config) |
 | [firefly-iii-feeder.bash](firefly-iii-feeder.bash) | Cron entry: normalizes each incoming CSV, imports, commits and pushes `archive/` |
 | [start-over.bash](start-over.bash) | Wipes Firefly's transactions and reloads the archive (see "Start Over") |
-| `archive/` | Private git repo (server only, not in this repo): every export dropped in `incoming/`, in `originals/<bank>/<account>/` (finished) or `unprocessed/` (rejected, crashed) |
+| `archive/` | Private git repo (server only, not in this repo): every export dropped in `incoming/`, in `originals/<bank>/<account>/` (finished) or `unprocessed/` (rejected, crashed); `accounts.yaml`, the own accounts (architectural_patterns.md §14) |
 | `bank-csv-originals/` | Exports from before the archive, one subfolder per bank: `Fintro/` is in the archive too, `Argenta/` (xlsx, pdf) enters it once the feeder reads those |
 | `data/incoming/` | Drop CSVs here to trigger processing |
 | `data/normalized/` | Normalized output waiting for import: `<base>-normalized[-partial].csv` |
 | `data/imported/` | Normalized files after import: `<base>-imported.csv` (`-imported-partial` if any row of the bank file failed, in the normalizer or the import) |
 | `data/failed-rows/` | Rows that failed normalization, dedup, or import: `<base>-normalize-failed.csv`, `-duplicate-failed.csv`, `-import-failed.csv` |
 | `data/row-state/` | Per account (`<account>.csv`): every bank row the feeder knows and its Firefly id; `backups/`. See architectural_patterns.md §7 |
-| `data/logs/` | `<base>.log` (normalizer) and `<base>-import.log` (mode, Firefly state read time, result and duration). `<time>-firefly-follow-up.log`: rules and running balances after a batch import, with durations; `<time>` is when the batch set the flag, so retries append |
+| `data/logs/` | `<base>.log` (normalizer) and `<base>-import.log` (mode, Firefly state read time, result and duration). `<time>-firefly-follow-up.log`: rules and running balances after a batch import, with durations; `<time>` is when the batch set the flag, so retries append. `<time>-firefly-accounts.log`: what the accounts file changed in Firefly, only when it changed something |
 | `data/*.flag` | State between runs (pending follow-up or push, one alert per outage): architectural_patterns.md §11 |
 | `data/temp/` | Working files (output and row state being prepared); emptied after each bank file |
 | `data-before-start-over/` | The previous `data/`, moved aside by `start-over.bash`; replaced by the next one |
@@ -137,6 +137,11 @@ PYTHONPATH=. python3 -m engine.debug_row <file> <row> [<row> ...]
 
 # Importer only; --dry-run builds every request but sends and moves nothing
 PYTHONPATH=. python3 -m engine.firefly.import_normalized [--dry-run] [--show N] [csv ...]
+
+# Own accounts file only (default archive/accounts.yaml), as the cron user; --dry-run shows what
+# would change. To change the file: a draft data/accounts-draft.yaml through the share, dry-run it
+# with --accounts, then copy it over archive/accounts.yaml (the next run with work commits it)
+PYTHONPATH=. python3 -m engine.firefly.import_normalized --accounts-only [--accounts <path>] [--dry-run]
 ```
 
 Alerts go to stderr ([engine/core/runtime.py](engine/core/runtime.py) `alert`);
@@ -210,9 +215,10 @@ Normalizer — [engine/process_csv.py](engine/process_csv.py) and
 Where the original goes per outcome: [docs/archive-and-reload.md](docs/archive-and-reload.md), rule 2.
 
 Importer — [engine/firefly/import_normalized.py](engine/firefly/import_normalized.py):
-`0` all imported, `75` some rows failed, `69` Firefly unreachable or token refused (files stay
-in `data/normalized/`), `70` unexpected crash (files stay). Alerted once per outage or crash
-through flags (architectural_patterns.md §11).
+`0` all imported, `75` some rows failed, `69` Firefly unreachable, token refused, or the accounts
+file invalid or refused (files stay in `data/normalized/`), `70` unexpected crash (files stay).
+Alerted once per outage or crash through flags (architectural_patterns.md §11). With
+`--accounts-only`: `0` applied, `69` the same blocks (printed, no flag), `2` no file.
 
 ## Banks
 
@@ -246,6 +252,10 @@ the field mapping: [docs/output-contract.md](docs/output-contract.md). Gotchas:
   transactions does not delete the expense/revenue accounts they created
   (`objects=expense_accounts` / `revenue_accounts`).
 - Dates must be ISO; Firefly parses `dd/mm/yyyy` as US month/day without error.
+- An own account's IBAN may not be on any other asset, expense or revenue account (Firefly's
+  `UniqueIban`; the account number likewise). Expense and revenue accounts that earlier imports
+  made for an IBAN therefore make Firefly refuse that IBAN as a new own account: start over, which
+  removes them before the first run applies the accounts file.
 
 ## Setup (by hand, once per server)
 
@@ -255,8 +265,10 @@ the field mapping: [docs/output-contract.md](docs/output-contract.md). Gotchas:
    configuration API stores it as text, which Firefly ignores. While it is off, batch mode
    silently does the full per-row work.
 3. **Default currency EUR** in Firefly.
-4. **Own (asset) accounts**, each with its IBAN or account number: without one, every row of that
-   account fails.
+4. **Own (asset) accounts**: `archive/accounts.yaml` in the archive repo (step 8), a copy of
+   [config/accounts.example.yaml](config/accounts.example.yaml) filled in, dry-run first ("Running").
+   The first run that imports creates them in Firefly. Every account needs its IBAN or account
+   number: without one, every row of that account fails.
 5. **`config/app.env`** on the server, mode 600, owned by the cron user: `FIREFLY_URL` and
    `FIREFLY_TOKEN` (a Personal Access Token; it expires after at most one year → "FIREFLY IMPORT
    BLOCKED" alert). The SFTP watcher excludes the file, so a local copy is never uploaded over it.
@@ -302,7 +314,9 @@ already imported transactions the new output too, start over. Not needed for
 a renamed bank column (add the name to `names`) or a changed `columns.required`
 (the row state adapts, see architectural_patterns.md §7).
 
-Run the regression test first (desktop). The command, what it does and what it does not restore:
+Run the regression test first (desktop). The own accounts stay, and the first run sets them to
+`archive/accounts.yaml`; `--wipe-accounts` deletes them too, and the first run creates them again
+from the file. The command, what it does and what it does not restore:
 [docs/archive-and-reload.md](docs/archive-and-reload.md), "`start-over.bash`".
 
 ## Adding a New Bank
@@ -311,7 +325,8 @@ Run the regression test first (desktop). The command, what it does and what it d
    filter values, `duplicate_key`, and `date_format` on `primary_transaction_date`
    (else the file names carry no period). See [config/fintro.yaml](config/fintro.yaml).
    Bank name is derived from the filename by `load_all_bank_configs()`
-   in [engine/core/csv_runtime.py](engine/core/csv_runtime.py) — no `bank:` field needed.
+   in [engine/core/csv_runtime.py](engine/core/csv_runtime.py) — no `bank:` field needed; a
+   `*.example.yaml` is a template, never a bank.
 2. Create the package `engine/banks/<bank>/`, exposing `normalize_row` in
    `__init__.py`. See [engine/banks/fintro/](engine/banks/fintro/).
 3. Document it in `engine/banks/<bank>/README.md` with the headings of the Fintro

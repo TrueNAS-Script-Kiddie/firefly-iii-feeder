@@ -240,7 +240,7 @@ State that must survive a run is a flag file in `data/`:
 |---|---|---|---|
 | `firefly-recalculate.flag` | importer, before the first batch row | `batch/finish` and the running balances both succeeded | counts as work: every minute retries the follow-up |
 | `firefly-follow-up-alerted.flag` | the first failed follow-up | together with the flag above | the retries stay silent |
-| `firefly-import-blocked.flag` | Firefly unreachable or token refused (exit 69) | a run that is not blocked | one alert per outage |
+| `firefly-import-blocked.flag` | Firefly unreachable, token refused, or the accounts file invalid or refused (exit 69) | a run that is not blocked | one alert per outage |
 | `firefly-import-crashed.flag` | unexpected exception in the importer (exit 70) | a run that does not crash | one alert, with the traceback |
 | `archive-push-pending.flag` | bash or `start-over.bash`, push failed | a push succeeded | counts as work: every minute pushes again; one alert |
 
@@ -260,8 +260,9 @@ bank file of the run and turns each row in `data/normalized/` into one `POST /ap
 with `error_if_duplicate_hash`: Firefly answers a row it already stored with 422 "Duplicate of
 transaction #id", counted as already present. Firefly gotchas: AGENTS.md "Firefly III Import".
 
-- **Firefly state read per run** — asset accounts by IBAN and account number, currencies,
-  existing transfers. Nothing about Firefly is configured in this repo.
+- **Own accounts file first** (§14), then the **Firefly state read per run** — asset accounts by
+  IBAN and account number, currencies, existing transfers. Nothing about Firefly is configured in
+  this repo.
 - **Row → split** (`build_split`; field table: [docs/output-contract.md](../../docs/output-contract.md),
   "In Firefly"):
   - The sign of `amount` decides withdrawal / deposit. The own account is `asset_account_iban`,
@@ -313,12 +314,57 @@ transaction #id", counted as already present. Firefly gotchas: AGENTS.md "Firefl
 - **Run-level vs row-level failure** — Firefly unreachable or the token refused
   (`FireflyUnavailableError` / `FireflyAuthError`,
   [engine/firefly/api.py](../../engine/firefly/api.py)) stops the run, exit 69; files stay in
-  place. A 5xx on a POST is first checked with `GET about` (`firefly_answers`): if Firefly answers,
-  the row is the problem and fails like any rejection, so one row cannot block every run; the third
-  such row in a row (`ROW_5XX_OUTAGE_STREAK`, counted across the run's files) is an outage after
+  place. So does an invalid accounts file, or an account or correction Firefly refuses (§14). A
+  5xx on a POST is first checked with `GET about` (`firefly_answers`): if Firefly answers, the row
+  is the problem and fails like any rejection, so one row cannot block every run; the third such
+  row in a row (`ROW_5XX_OUTAGE_STREAK`, counted across the run's files) is an outage after
   all. A rejected row goes to `data/failed-rows/<base>-import-failed.csv` and leaves the row state
   (§7); its file moves to `data/imported/` as `-imported-partial`, as does a file the normalizer
   already marked `-normalized-partial`. Any other exception (a bug) leaves the files in place,
   exit 70.
 - **Dry run** — `--dry-run` runs the same decisions (including simulated transfer claims) without
   sending, moving or recording anything.
+
+## 14. Own Accounts File
+
+[engine/firefly/accounts.py](../../engine/firefly/accounts.py). The own (asset) accounts are
+described in `archive/accounts.yaml`, in the archive repo, so a reload has them (hard rule
+"Rebuild from scratch"). Every field: the template
+[config/accounts.example.yaml](../../config/accounts.example.yaml).
+
+- **When**: at the start of every importer run with files to import, before the Firefly state is
+  read (§13); by hand with `--accounts-only` (AGENTS.md "Running"). A new account only matters
+  with the export that needs it, so the idle path gets no check. No file: Firefly's accounts are
+  used as they are.
+- **Checked as a whole first**, before Firefly is contacted: unknown fields, IBAN checksums,
+  both-or-neither pairs, unique names and identifiers. An unquoted `account_number` of only digits
+  is refused (YAML drops leading zeros). An invalid file sends nothing.
+- **Matching**: by `iban`, else `account_number`, each against both fields of every Firefly asset
+  account. An account with neither (a cash wallet) has a `key`, kept as the last line of its
+  Firefly notes (`firefly-iii-feeder key: <key>`), so a rename in the file renames it in Firefly;
+  an existing account without that line is found once by its name (Firefly keeps asset account
+  names unique), and the update adds it.
+- **Applying**: missing → created; any field that differs → updated, sending every field of the
+  account (Firefly checks some only together, e.g. a credit card's payment date with its role).
+  Nothing is deleted. The file is the truth: a GUI change to a listed account is overwritten. An
+  opening balance of 0 is none (Firefly keeps none for 0). Closed accounts (`active: false`) are
+  listed by Firefly and may still be used by id, so their rows import, also at a reload.
+- **Unlisted**: an own account in Firefly that the file does not list gives the alert `FIREFLY OWN
+  ACCOUNTS NOT IN THE ACCOUNTS FILE` in every run that imports (one mail per drop, not per minute).
+- **Refused or invalid**: like an outage (§11, §13): exit 69, nothing imported, files stay, one
+  alert through `firefly-import-blocked.flag`; the next run after the fix goes on. The alert names
+  the file, the account and the reason.
+- **Corrections** (bookings no export contains): ordinary transactions, no row state.
+  `internal_reference` = `correction|<account>|<sha8>`, `<account>` the IBAN, else the account
+  number without spaces, else the key; `<sha8>` the first 8 hex digits of the SHA-256 of
+  `<date>|<amount>|<counterparty>|<description>`, so a changed correction has a new key. Every
+  apply searches `internal_reference_starts:correction|`: one not in the file is deleted (then
+  `data/purge`, AGENTS.md "Firefly III Import"), one missing is created. Amount + → deposit from the
+  counterparty, − → withdrawal to it; notes `Correction from the accounts file`; rules applied.
+- **Log**: changes go to `data/logs/<time>-firefly-accounts.log`, only when there are any; each
+  import log's first line sums them up (`accounts file: 1 accounts updated` or
+  `nothing to change`). `--accounts-only` also prints them, and leaves the flags alone.
+- **Start-over**: the default keeps the own accounts (with opening balances, piggy banks and
+  recurring transactions), and the first run sets them to the file; `--wipe-accounts` deletes them
+  and the first run creates them again ([docs/archive-and-reload.md](../../docs/archive-and-reload.md)).
+  The accounts then have new Firefly ids: other tools find an account by IBAN or name, never by id.
