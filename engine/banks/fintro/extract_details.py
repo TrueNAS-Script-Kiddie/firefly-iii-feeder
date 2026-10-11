@@ -13,7 +13,8 @@ The order is determined by parsing reliability, not by the output schema.
 import re
 from typing import Any
 
-from engine.banks.fintro.parsers import parse_ddmmyyyy, parse_ddmmyyyy_time, parse_iban
+from engine.banks.fintro.parsers import parse_ddmmyyyy, parse_ddmmyyyy_time
+from engine.core.parsers import parse_iban
 
 # Reused by multiple blocks below (DOORLOPENDE OPDRACHT, OVERSCHRIJVING, MOBIELE BETALING).
 # Country code + check digits are always written together (BE57, never "LN 35" from an

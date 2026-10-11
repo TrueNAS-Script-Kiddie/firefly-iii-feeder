@@ -73,7 +73,7 @@ into the parser (`debug_row` shows where a row gets stuck).
 | Path | Purpose |
 |------|---------|
 | [engine/process_csv.py](engine/process_csv.py) | Normalizer entry point; orchestrates all stages. `main()` + `NORMALIZED_FIELDNAMES` |
-| [engine/core/](engine/core/) | Shared pipeline modules: `csv_runtime`, `csv_validation`, `row_state`, `completion`, `runtime` |
+| [engine/core/](engine/core/) | Shared pipeline modules: `csv_runtime`, `csv_validation`, `row_state`, `completion`, `runtime`; `xlsx_reader` (xlsx → rows, stdlib); `parsers` (IBAN with checksum, amounts, structured reference; for every bank and the importer) |
 | [engine/banks/](engine/banks/) | One sub-package per bank. Each must export `normalize_row()` and has a `README.md` (see "Banks") |
 | [engine/banks/fintro/](engine/banks/fintro/) | Reference bank: `normalize` (exports `normalize_row`), `extract_details`, `parsers`, `reconcile`; `debug_trace` (its part of `debug_row`) |
 | [docs/output-contract.md](docs/output-contract.md) | What other tools may rely on in the normalized output and in Firefly |

@@ -9,7 +9,8 @@ or merge, and raise on genuine conflicts.
 import re
 from decimal import ROUND_HALF_UP, Decimal
 
-from engine.banks.fintro.parsers import normalize_for_comparison, parse_foreign_amount
+from engine.banks.fintro.parsers import parse_foreign_amount
+from engine.core.parsers import normalize_for_comparison
 
 
 def merge_opposing_account_name(column_value: str, details_value: str) -> str:

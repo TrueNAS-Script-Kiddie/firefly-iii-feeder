@@ -84,7 +84,7 @@ merges or raises on a mismatch; neither source is trusted blindly.
 - **Column wins** for amount, IBAN, dates and the free-text message (details only validate).
 - **Details win** for structured references, BIC, and facts missing from the columns.
 - **A structured message** (`+++xxx/xxxx/xxxxx+++`) takes priority over free text when either
-  source has one (`extract_structured_ref` in [parsers.py](parsers.py)).
+  source has one (`extract_structured_ref` in [engine/core/parsers.py](../../core/parsers.py)).
 - **Counterparty name** (`merge_opposing_account_name` in [reconcile.py](reconcile.py)): the column
   name plus whatever details add after it. A leading filler `VAN` is dropped only when the column
   name proves it is not part of the name (`VAN DER MEULEN TOM`). Text before the column name, or a

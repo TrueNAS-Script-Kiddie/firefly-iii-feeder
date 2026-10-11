@@ -22,18 +22,18 @@ from decimal import Decimal
 from typing import Any
 
 from engine.banks.fintro.extract_details import extract_details
-from engine.banks.fintro.parsers import (
-    apply_replacements,
-    extract_structured_ref,
-    normalize_for_comparison,
-    parse_comma_decimal_amount,
-    parse_ddmmyyyy,
-    parse_iban,
-)
+from engine.banks.fintro.parsers import parse_ddmmyyyy
 from engine.banks.fintro.reconcile import (
     merge_opposing_account_name,
     reconcile_foreign_amount,
     reconcile_transaction_types,
+)
+from engine.core.parsers import (
+    apply_replacements,
+    extract_structured_ref,
+    normalize_for_comparison,
+    parse_comma_decimal_amount,
+    parse_iban,
 )
 
 # ----------------------------------------------------------------------

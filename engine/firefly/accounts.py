@@ -16,7 +16,6 @@ Firefly refuses, raises AccountsFileError: the importer handles it as an outage 
 
 import collections
 import hashlib
-import re
 import urllib.parse
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -26,6 +25,7 @@ from typing import Any
 
 import yaml
 
+from engine.core.parsers import parse_iban
 from engine.firefly.api import FireflyClient
 
 # kind -> Firefly account_role; checking + shared -> SHARED_ROLE
@@ -51,7 +51,6 @@ CORRECTION_FIELDS = {"date", "amount", "counterparty", "description"}
 CORRECTION_PREFIX = "correction|"
 CORRECTION_NOTE = "Correction from the accounts file"
 
-RE_IBAN = re.compile(r"^[A-Z]{2}[0-9]{2}[A-Z0-9]{11,30}$")
 CENT = Decimal("0.01")
 
 
@@ -138,14 +137,6 @@ def parse_amount(value: Any, what: str) -> str:
     return str(amount.quantize(CENT))
 
 
-def parse_iban(value: Any) -> str:
-    iban = clean_identifier(parse_text(value, "iban"))
-    rearranged = iban[4:] + iban[:4]
-    if not RE_IBAN.match(iban) or int("".join(str(int(c, 36)) for c in rearranged)) % 97 != 1:
-        raise ValueError(f"iban {value!r} is not a valid IBAN")
-    return iban
-
-
 def parse_bool(value: Any, what: str) -> bool:
     if not isinstance(value, bool):
         raise ValueError(f"{what} must be true or false, got {value!r}")
@@ -182,7 +173,9 @@ def parse_account(item: Any) -> OwnAccount:
     if shared and kind != "checking":
         raise ValueError("shared is only for kind checking")
 
-    iban = parse_iban(item["iban"]) if item.get("iban") is not None else ""
+    iban = ""
+    if item.get("iban") is not None:
+        iban = parse_iban(parse_text(item["iban"], "iban"), error_message=f"iban {item['iban']!r} is not a valid IBAN")
     account_number = ""
     if item.get("account_number") is not None:
         # Unquoted digits are a YAML number, which drops leading zeros
