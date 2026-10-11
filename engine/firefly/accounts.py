@@ -4,8 +4,7 @@ Every field is explained in the template, config/accounts.example.yaml.
 
 Applied by the importer at the start of every run that imports, before it reads the asset
 accounts, or by hand (import_normalized --accounts-only):
-  - each listed account is found in Firefly by its iban, else its account_number, else (with
-    neither, e.g. a cash wallet) its key, kept as the last line of the account's notes: missing ->
+  - each listed account is found in Firefly by its iban, else its account_number: missing ->
     created, a field that differs -> updated. Nothing is deleted;
   - an own account in Firefly that the file does not list is returned, for an alert;
   - corrections are transactions with internal_reference correction|<account>|<sha8>: one in
@@ -30,7 +29,7 @@ import yaml
 from engine.firefly.api import FireflyClient
 
 # kind -> Firefly account_role; checking + shared -> SHARED_ROLE
-ROLES = {"checking": "defaultAsset", "savings": "savingAsset", "credit_card": "ccAsset", "cash": "cashWalletAsset"}
+ROLES = {"checking": "defaultAsset", "savings": "savingAsset", "credit_card": "ccAsset"}
 SHARED_ROLE = "sharedAsset"
 # The only payment plan Firefly knows ("Full payment every month")
 CREDIT_CARD_TYPE = "monthlyFull"
@@ -46,14 +45,11 @@ ACCOUNT_FIELDS = {
     "opening_balance_date",
     "active",
     "notes",
-    "key",
     "corrections",
 }
 CORRECTION_FIELDS = {"date", "amount", "counterparty", "description"}
 CORRECTION_PREFIX = "correction|"
 CORRECTION_NOTE = "Correction from the accounts file"
-# Last line of the notes of an account without IBAN and account number: how it is found again
-KEY_PREFIX = "firefly-iii-feeder key: "
 
 RE_IBAN = re.compile(r"^[A-Z]{2}[0-9]{2}[A-Z0-9]{11,30}$")
 CENT = Decimal("0.01")
@@ -87,21 +83,15 @@ class OwnAccount:
     opening_balance_date: str
     active: bool
     notes: str  # "" when none
-    key: str  # only without iban and account_number, else ""
     corrections: list[Correction] = field(default_factory=list)
 
     @property
     def identifier(self) -> str:
-        """What names the account in the correction keys: its IBAN, else its account number, else its key."""
-        return self.iban or self.account_number or self.key
-
-    @property
-    def notes_in_firefly(self) -> str:
-        """The account's notes in Firefly: the file's notes, then the key line."""
-        return "\n".join(part for part in (self.notes, f"{KEY_PREFIX}{self.key}" if self.key else "") if part)
+        """What names the account in the correction keys: its IBAN, else its account number."""
+        return self.iban or self.account_number
 
     def describe(self) -> str:
-        return f"'{self.name}' ({self.iban or self.account_number or f'key {self.key}'})"
+        return f"'{self.name}' ({self.identifier})"
 
 
 def correction_key(account: OwnAccount, correction: Correction) -> str:
@@ -201,13 +191,8 @@ def parse_account(item: Any) -> OwnAccount:
         # Firefly drops the spaces: kept, they would differ from Firefly at every run
         account_number = parse_text(item["account_number"], "account_number").replace(" ", "")
 
-    key = ""
     if not iban and not account_number:
-        if item.get("key") is None:
-            raise ValueError("needs an iban, an account_number or a key: Firefly's account is found by one of them")
-        key = parse_text(item["key"], "key")
-    elif "key" in item:
-        raise ValueError("key is only for an account without iban and account_number")
+        raise ValueError("needs an iban or an account_number: Firefly's account is found by one of them")
 
     monthly_payment_date = ""
     if kind == "credit_card":
@@ -241,7 +226,6 @@ def parse_account(item: Any) -> OwnAccount:
         opening_balance_date=opening_balance_date,
         active=parse_bool(item.get("active", True), "active"),
         notes=parse_text(item["notes"], "notes") if item.get("notes") is not None else "",
-        key=key,
         corrections=[parse_correction(c) for c in corrections],
     )
 
@@ -270,7 +254,6 @@ def load_accounts_file(path: str) -> list[OwnAccount]:
     for account in accounts:
         for key in (
             f"name {account.name}",
-            *([f"key {account.key}"] if account.key else []),
             *(f"identifier {i}" for i in {account.iban, clean_identifier(account.account_number)} - {""}),
         ):
             if key in seen:
@@ -308,17 +291,8 @@ def firefly_notes(attributes: dict[str, Any]) -> str:
 def find_in_firefly(account: OwnAccount, firefly_accounts: list[dict[str, Any]]) -> dict[str, Any] | None:
     """
     The Firefly asset account holding the account's IBAN, else its account number (in either
-    field); with neither, the one whose notes end with the account's key line, else the one of
-    the same name (an account made before it had a key: the update then adds the key).
+    field).
     """
-    if account.key:
-        key_line = f"{KEY_PREFIX}{account.key}"
-        hits = [f for f in firefly_accounts if firefly_notes(f["attributes"]).rpartition("\n")[2] == key_line]
-        if len(hits) > 1:
-            names = ", ".join(f"'{h['attributes']['name']}'" for h in hits)
-            raise AccountsFileError(f"account {account.describe()}: several Firefly accounts carry its key: {names}")
-        # Firefly keeps asset account names unique
-        return hits[0] if hits else next((f for f in firefly_accounts if f["attributes"]["name"] == account.name), None)
     for identifier in (account.iban, clean_identifier(account.account_number)):
         if not identifier:
             continue
@@ -343,7 +317,7 @@ def wanted_fields(account: OwnAccount) -> dict[str, Any]:
         "active": account.active,
         "opening_balance": account.opening_balance or None,
         "opening_balance_date": account.opening_balance_date or None,
-        "notes": account.notes_in_firefly or None,
+        "notes": account.notes or None,
     }
     if account.monthly_payment_date:
         fields.update(credit_card_type=CREDIT_CARD_TYPE, monthly_payment_date=account.monthly_payment_date)

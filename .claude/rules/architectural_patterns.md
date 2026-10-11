@@ -341,10 +341,7 @@ described in `archive/accounts.yaml`, in the archive repo, so a reload has them 
   both-or-neither pairs, unique names and identifiers. An unquoted `account_number` of only digits
   is refused (YAML drops leading zeros). An invalid file sends nothing.
 - **Matching**: by `iban`, else `account_number`, each against both fields of every Firefly asset
-  account. An account with neither (a cash wallet) has a `key`, kept as the last line of its
-  Firefly notes (`firefly-iii-feeder key: <key>`), so a rename in the file renames it in Firefly;
-  an existing account without that line is found once by its name (Firefly keeps asset account
-  names unique), and the update adds it.
+  account; every account needs one of them. A rename in the file renames the account in Firefly.
 - **Applying**: missing → created; any field that differs → updated, sending every field of the
   account (Firefly checks some only together, e.g. a credit card's payment date with its role).
   Nothing is deleted. The file is the truth: a GUI change to a listed account is overwritten. An
@@ -358,7 +355,7 @@ described in `archive/accounts.yaml`, in the archive repo, so a reload has them 
   the file, the account and the reason.
 - **Corrections** (bookings no export contains): ordinary transactions, no row state.
   `internal_reference` = `correction|<account>|<sha8>`, `<account>` the IBAN, else the account
-  number without spaces, else the key; `<sha8>` the first 8 hex digits of the SHA-256 of
+  number without spaces; `<sha8>` the first 8 hex digits of the SHA-256 of
   `<date>|<amount>|<counterparty>|<description>`, so a changed correction has a new key. Every
   apply searches `internal_reference_starts:correction|`: one not in the file is deleted (then
   `data/purge`, AGENTS.md "Firefly III Import"), one missing is created. Amount + → deposit from the

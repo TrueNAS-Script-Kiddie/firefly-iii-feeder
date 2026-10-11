@@ -449,6 +449,8 @@ Firefly accepts them as own accounts.
 5. Then `start-over.bash` as the cron user (AGENTS.md "Start Over"), as proof that the archive
    alone rebuilds Fintro and Argenta together: read the balances and counts first, and compare
    them after the reload.
+   It also gives the cash withdrawals already in Firefly their new destination, Firefly's Cash
+   account (docs/output-contract.md, "Changes", 2026-10-11).
 
 Step 3 takes a few minutes (~750 rows, batch mode); the start-over about an hour.
 

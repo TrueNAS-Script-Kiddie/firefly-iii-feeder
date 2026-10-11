@@ -87,8 +87,7 @@ are transactions without a bank row: `internal_reference` = `correction|<account
 with a new key; the old one is deleted.
 
 **Own accounts** are set from the accounts file and may get new Firefly ids at a start-over: find
-them by IBAN, account number or name, never by id. The last line of an account's notes may be the
-feeder's `firefly-iii-feeder key: <key>`.
+them by IBAN, account number or name, never by id.
 
 ## Changes
 

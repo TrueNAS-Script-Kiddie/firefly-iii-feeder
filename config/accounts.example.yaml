@@ -9,8 +9,7 @@
 #   - no account is deleted (only start-over.bash --wipe-accounts does); an own account in
 #     Firefly that is not listed here gives an alert in every import run.
 # This file is the truth: a change made in the Firefly GUI to a listed account is overwritten.
-# An account is found in Firefly by its iban, else by its account_number, else (with neither, e.g.
-# a cash wallet) by its key.
+# An account is found in Firefly by its iban, else by its account_number; it needs one of them.
 # An invalid file blocks the import (one alert); fix the file and the next run goes on.
 #
 # Fields (one list item per account; any other field is refused). Between [brackets]: the field
@@ -21,7 +20,6 @@
 #                           savings      savings account or term deposit     [Savings account]
 #                           credit_card  credit card with its own statement  [Credit card]
 #                                        (needs monthly_payment_date)
-#                           cash         cash wallet                         [Cash wallet]
 #                         A debit card is not an account: it belongs to its checking account.
 #   shared                true for an account of more than one person (joint account).
 #                         Only with kind checking: the role becomes
@@ -32,11 +30,6 @@
 #                         belong on this same account. Spaces are dropped, as Firefly does.
 #                         Quote one of only digits ("0123"): unquoted, YAML drops its leading
 #                         zeros. [Account number]
-#   key                   Only for an account without iban and account_number (a cash wallet),
-#                         and then required: a short text the feeder keeps as the last line of
-#                         [Notes], "firefly-iii-feeder key: <key>", to find the account again,
-#                         also after a rename. An existing account without that line is found
-#                         once by its name.
 #   notes                 Free text, e.g. what the account is for or who shares it. [Notes]
 #   monthly_payment_date  credit_card only: a date whose day is the day of the month the card
 #                         balance is debited. [Credit card monthly payment date]; the feeder also
@@ -76,8 +69,3 @@
   active: false
   corrections:
     - {date: 2020-12-31, amount: 123.45, counterparty: "Old bank", description: "Rest, presumably interest"}
-
-- name: ACME cash
-  kind: cash
-  key: cash
-  notes: Shared by the household
