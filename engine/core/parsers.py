@@ -1,6 +1,7 @@
 """
 Parsing/formatting helpers shared by the banks and the importer:
 - IBAN parsing/validation, with checksum
+- Belgian account number from before IBAN ('123-1234567-12') -> IBAN
 - Amounts with a decimal comma and thousands dots ('1.234,56')
 - Structured reference (+++nnn/nnnn/nnnnn+++) handling
 - Accent-insensitive string comparison
@@ -28,6 +29,22 @@ def parse_iban(value: str, *, error_message: str | None = None) -> str:
         raise ValueError(msg)
 
     return iban
+
+
+def belgian_account_to_iban(value: str) -> str:
+    """
+    Belgian account number of before 2014, '123-1234567-12', -> its IBAN 'BEnn123123456712'.
+    Raises ValueError on another form or a wrong check: the last two digits are the first ten
+    mod 97, 97 when that is 0.
+    """
+    if not re.fullmatch(r"[0-9]{3}-[0-9]{7}-[0-9]{2}", value):
+        raise ValueError(f"Not a Belgian account number: '{value}'")
+    digits = value.replace("-", "")
+    if (int(digits[:10]) % 97 or 97) != int(digits[10:]):
+        raise ValueError(f"Belgian account number with a wrong check: '{value}'")
+    # ISO 13616 check digits: the number, then 'BE' as 1114 and '00', mod 97
+    check = 98 - int(f"{digits}111400") % 97
+    return parse_iban(f"BE{check:02d}{digits}")
 
 
 def parse_comma_decimal_amount(value: str) -> Decimal | None:

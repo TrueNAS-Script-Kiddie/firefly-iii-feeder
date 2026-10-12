@@ -51,6 +51,8 @@ NORMALIZED_FIELDNAMES = [
     "unmapped_reference_parts",  # 20
     "asset_account_number",  # 21: own account without an IBAN (e.g. a credit card)
     "row_key",  # 22: <account>|<duplicate key>, set here, not by the bank module
+    "is_card_repayment",  # 23: "1" for a card statement's repayment line, else empty
+    "is_payment_reversal",  # 24: "1" for a card statement's reversal of an earlier payment, else empty
 ]
 
 
