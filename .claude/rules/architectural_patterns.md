@@ -232,7 +232,11 @@ together, and a name says what is in it; this gives a complete audit trail witho
   a broken file gets reported.
 - Exit codes `0/65/75/99` are "Python handled it"; anything else triggers a fallback move of the
   incoming file to `archive/unprocessed/`, unless that folder already holds its content.
-- After every bank file, the importer (§13); then the archive is committed and pushed
+- After every bank file, the importer (§13); then, if the run processed an export and none waits
+  in `data/incoming/` any more, the checks across exports
+  ([engine/archive_checks.py](../../engine/archive_checks.py): every bank's
+  `engine/banks/<bank>/archive_check.py`, each difference an alert, at every such run while it
+  stays); then the archive is committed and pushed
   ([docs/archive-and-reload.md](../../docs/archive-and-reload.md), rule 7).
 - Alerts go to stderr, which the TrueNAS cron job emails. Success is silent.
 

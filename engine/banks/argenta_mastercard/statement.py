@@ -311,8 +311,26 @@ def is_statement(pieces: list[TextPiece]) -> bool:
     )
 
 
+@dataclass(frozen=True)
+class Statement:
+    customer_reference: str
+    statement_date: str  # ISO
+    period: tuple[str, str]  # as printed, ISO
+    previous_balance: Decimal  # '-' = owed
+    new_balance: Decimal
+    rows: list[dict[str, str]]
+    source_lines: list[str]
+    lines: list[Line]  # every classified line
+
+
 def read(path: str) -> tuple[list[dict[str, str]], list[str], tuple[str, str]] | None:
     """(rows, source lines, printed period) of a statement; None for a PDF that is not one."""
+    statement = read_file(path)
+    return None if statement is None else (statement.rows, statement.source_lines, statement.period)
+
+
+def read_file(path: str) -> Statement | None:
+    """The whole statement; None for a PDF that is not one."""
     try:
         pieces = read_pdf_text(path)
     except ValueError:
@@ -323,14 +341,10 @@ def read(path: str) -> tuple[list[dict[str, str]], list[str], tuple[str, str]] |
         return None
     if not is_statement(pieces):
         return None
-    rows, source_lines, period, _ = read_statement(pieces)
-    return rows, source_lines, period
+    return read_statement(pieces)
 
 
-def read_statement(
-    pieces: list[TextPiece],
-) -> tuple[list[dict[str, str]], list[str], tuple[str, str], list[Line]]:
-    """Rows, their source lines, the printed period (ISO) and every classified line."""
+def read_statement(pieces: list[TextPiece]) -> Statement:
     page_numbers = sorted({p.page for p in pieces})
     pages = [split_page(page, [p for p in pieces if p.page == page]) for page in page_numbers]
     first = pages[0][0]
@@ -497,8 +511,16 @@ def read_statement(
     for sequence, row_values in enumerate(rows, start=1):
         row_values["Volgnummer"] = f"{sequence:0{width}d}"
         source_lines.append(row_values.pop("_line").where)
-    period = (first.period[0].isoformat(), first.period[1].isoformat())
-    return rows, source_lines, period, all_lines
+    return Statement(
+        customer_reference=first.customer_reference,
+        statement_date=first.statement_date.isoformat(),
+        period=(first.period[0].isoformat(), first.period[1].isoformat()),
+        previous_balance=previous_balance,
+        new_balance=new_balance,
+        rows=rows,
+        source_lines=source_lines,
+        lines=all_lines,
+    )
 
 
 def main() -> int:
@@ -508,15 +530,16 @@ def main() -> int:
         print("not an Argenta Mastercard statement")
         return 1
     try:
-        rows, source_lines, period, lines = read_statement(pieces)
+        statement = read_statement(pieces)
     except ValueError as exc:
         print(f"FAILED: {exc}")
         return 1
-    for line in lines:
+    for line in statement.lines:
         shown = " | ".join(piece.text.strip() for piece in line.pieces)
         print(f"{line.where:<7} {line.kind:<26} {shown}")
-    print(f"\nperiod {period[0]} to {period[1]}, {len(rows)} rows")
-    for where, row_values in zip(source_lines, rows, strict=True):
+    first, last = statement.period
+    print(f"\nperiod {first} to {last}, {len(statement.rows)} rows")
+    for where, row_values in zip(statement.source_lines, statement.rows, strict=True):
         print(f"{where:<7} " + " | ".join(f"{k}={v}" for k, v in row_values.items() if v))
     return 0
 

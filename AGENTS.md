@@ -142,6 +142,10 @@ PYTHONPATH=. python3 -m engine.firefly.import_normalized [--dry-run] [--show N] 
 # would change. To change the file: a draft data/accounts-draft.yaml through the share, dry-run it
 # with --accounts, then copy it over archive/accounts.yaml (the next run with work commits it)
 PYTHONPATH=. python3 -m engine.firefly.import_normalized --accounts-only [--accounts <path>] [--dry-run]
+
+# Checks across the archived exports (card statements against the paying account), reads only;
+# --print prints the differences instead of alerting
+PYTHONPATH=. python3 -m engine.archive_checks --print [--archive <dir>]
 ```
 
 Alerts go to stderr ([engine/core/runtime.py](engine/core/runtime.py) `alert`);

@@ -196,5 +196,13 @@ if ((${#NORMALIZED[@]})) || [[ -e "${RECALCULATE_FLAG}" ]]; then
 	python3 -m engine.firefly.import_normalized
 fi
 
+# Checks across exports (card statements against the paying account) once every export is in:
+# compared half loaded (a reload, a file still uploading) they would alert falsely. The run that
+# processes the last waiting file checks. Differences alert on stderr themselves.
+WAITING=("${IN_DIR}"/!(~\$*).@(csv|xlsx|pdf))
+if ((FILE_NUMBER)) && ((${#WAITING[@]} == 0)); then
+	python3 -m engine.archive_checks
+fi
+
 # Still under the flock: start-over.bash commits the archive too
 archive_to_git
