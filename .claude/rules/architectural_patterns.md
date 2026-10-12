@@ -131,7 +131,7 @@ Unknown = not in the file; Waiting = recorded, its output waits in `data/normali
 - **The normalizer** loads the state at the start of each file and classifies each row
   (`classify_duplicate`): `new` (key not seen), `identical` (all required fields match → skipped,
   also while Waiting), `conflict` (fields differ → duplicate-failed, state unchanged). Rows enter
-  only after `normalize_row` succeeded, so a failed row is retried when its CSV comes again; they
+  only after `normalize_row` succeeded, so a failed row is retried when its export comes again; they
   are added to the in-memory state during the loop, so duplicates within one file are caught too.
   `finalize` commits them only for `success` / `partial`.
 - **The importer** (`record_import`, per file, before the file moves) fills `firefly_id`, or
@@ -209,6 +209,11 @@ together, and a name says what is in it; this gives a complete audit trail witho
   `<run>-unknown-<source name>`; once bank, account and period are known (before the row loop)
   `process_csv` sets the final names, and `finalize` renames the log `<run>.log` that bash created.
   The source name is on the log's first line.
+- **Period**: `<first>_<last>` is the period a statement prints (its reader returns it,
+  [engine/core/csv_runtime.py](../../engine/core/csv_runtime.py) `load_rows`), so a statement is
+  recognized by its name whatever dates its lines carry; else the first and last
+  `primary_transaction_date` of the valid rows (`transaction_period`, by the config's
+  `date_format`), left out when unknown.
 - **The importer** derives its names (`-imported`, `-import.log`, `-import-failed`) from the
   normalized file, so they follow automatically.
 - **The archived original** keeps the run id of its first arrival (`ARRIVAL_RUN_ID`, in
@@ -297,7 +302,7 @@ transaction #id", counted as already present. Firefly gotchas: AGENTS.md "Firefl
   `TRANSFER_MATCH_DAYS` (7 days; `CARD_REPAYMENT_MATCH_DAYS`, 15, between a card and its
   `paid_from` account, either way: the oldest statements date the repayment line about ten days
   before the debit), whose side (out or in) is still free; else it creates one. Order and
-  history coverage of the accounts' CSVs don't matter. The transfer carries only the first side's
+  history coverage of the accounts' exports don't matter. The transfer carries only the first side's
   fields; the claiming side's `external_id`, `row_key` and notes stay in its `data/imported/` file.
 
   ```mermaid

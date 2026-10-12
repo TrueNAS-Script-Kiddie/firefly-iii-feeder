@@ -1,6 +1,6 @@
 # Firefly III Feeder
 
-Ingests bank-exported CSVs, validates and normalizes transaction data,
+Ingests bank exports (CSV, xlsx, PDF statements), validates and normalizes transaction data,
 deduplicates against a persistent per-account row state, emits a unified
 output format, and imports that output into Firefly III via its REST API.
 Runs unattended from a TrueNAS cron job. How it works:
@@ -73,9 +73,12 @@ into the parser (`debug_row` shows where a row gets stuck).
 | Path | Purpose |
 |------|---------|
 | [engine/process_csv.py](engine/process_csv.py) | Normalizer entry point; orchestrates all stages. `main()` + `NORMALIZED_FIELDNAMES` |
-| [engine/core/](engine/core/) | Shared pipeline modules: `csv_runtime`, `csv_validation`, `row_state`, `completion`, `runtime`; `xlsx_reader` (xlsx → rows, stdlib); `parsers` (IBAN with checksum, amounts, structured reference; for every bank and the importer) |
+| [engine/core/](engine/core/) | Shared pipeline modules: `csv_runtime`, `csv_validation`, `row_state`, `completion`, `runtime`; `xlsx_reader` (xlsx → rows) and `pdf_text` (PDF → pieces of text with page and position), both stdlib; `parsers` (IBAN with checksum, amounts, structured reference; for every bank and the importer) |
 | [engine/banks/](engine/banks/) | One sub-package per bank. Each must export `normalize_row()` and has a `README.md` (see "Banks") |
 | [engine/banks/fintro/](engine/banks/fintro/) | Reference bank: `normalize` (exports `normalize_row`), `extract_details`, `parsers`, `reconcile`; `debug_trace` (its part of `debug_row`) |
+| [engine/banks/argenta/](engine/banks/argenta/) | Argenta accounts (xlsx): `normalize`, `extract_card_details`, `parsers`, `debug_trace`; the README covers the Mastercard too |
+| [engine/banks/argenta_mastercard/](engine/banks/argenta_mastercard/) | Argenta Mastercard (PDF statement): `statement` (the reader), `normalize`, `parsers`, `debug_trace`, `archive_check` |
+| [engine/archive_checks.py](engine/archive_checks.py) | Checks across the archived exports: runs every `engine/banks/<bank>/archive_check.py` |
 | [docs/output-contract.md](docs/output-contract.md) | What other tools may rely on in the normalized output and in Firefly |
 | [docs/archive-and-reload.md](docs/archive-and-reload.md) | The archive, what happens to each file and row, `start-over.bash`, setup, restore on a new server |
 | `plans/` | Plans for work in progress; once done, their lasting facts move into the docs and the plan is deleted (git keeps it) |
@@ -100,9 +103,9 @@ into the parser (`debug_row` shows where a row gets stuck).
 
 File names in `data/` describe the content: `<base>` = `<run>-<bank>-<account>-<first>_<last>`,
 e.g. `20261009-101500-001-fintro-BE68539007547034-2026-03-13_2026-10-07`. `<run>` = start of the
-cron run + the file's number in that run; `<first>_<last>` = first and last transaction date
-(`date_format` of `primary_transaction_date` in the bank config). How they are made:
-architectural_patterns.md §10.
+cron run + the file's number in that run; `<first>_<last>` = the period printed on a statement,
+else the first and last transaction date (`date_format` of `primary_transaction_date` in the bank
+config). How they are made: architectural_patterns.md §10.
 
 ## Deploy = save
 
@@ -234,6 +237,7 @@ loads it by itself when working in the bank's folder (`CLAUDE.md` there imports 
 | Bank | Export | Docs |
 |------|--------|------|
 | Fintro | CSV, one per account | [engine/banks/fintro/README.md](engine/banks/fintro/README.md) |
+| Argenta | xlsx, one per account; Mastercard: monthly PDF statement | [engine/banks/argenta/README.md](engine/banks/argenta/README.md) |
 
 ## Firefly III Import
 
@@ -245,7 +249,7 @@ the field mapping: [docs/output-contract.md](docs/output-contract.md). Gotchas:
   and `batch_submission` are left out).
   So a change to what `build_split` sends makes an already imported row a second
   transaction when it is sent again, if nothing else stopped it. The row state does:
-  a row whose `firefly_id` is set is never sent again, and a re-dropped bank CSV
+  a row whose `firefly_id` is set is never sent again, and a re-dropped export
   stops at the row state before the importer. To give rows already in Firefly the
   new fields: Start Over.
 - Firefly's duplicate check includes **deleted** transactions. After deleting
@@ -272,9 +276,11 @@ the field mapping: [docs/output-contract.md](docs/output-contract.md). Gotchas:
 4. **Own (asset) accounts**: `archive/accounts.yaml` in the archive repo (step 8), a copy of
    [config/accounts.example.yaml](config/accounts.example.yaml) filled in, dry-run first ("Running").
    The first run that imports creates them in Firefly. Every account needs its IBAN or account
-   number: without one, every row of that account fails.
+   number: without one, every row of that account fails. A credit card with a statement also
+   needs `paid_from`, the account that pays it off.
 5. **`config/app.env`** on the server, mode 600, owned by the cron user: `FIREFLY_URL` and
-   `FIREFLY_TOKEN` (a Personal Access Token; it expires after at most one year → "FIREFLY IMPORT
+   `FIREFLY_TOKEN` (a Personal Access Token of Firefly's owner, the only user who may create a
+   currency Firefly doesn't know yet; it expires after at most one year → "FIREFLY IMPORT
    BLOCKED" alert). The SFTP watcher excludes the file, so a local copy is never uploaded over it.
 6. **Feeder folder** owned by the cron user, `firefly-iii-feeder.bash` executable (SFTP sets no
    execute bit, a git clone does).
@@ -333,6 +339,17 @@ from the file. The command, what it does and what it does not restore:
    `*.example.yaml` is a template, never a bank.
 2. Create the package `engine/banks/<bank>/`, exposing `normalize_row` in
    `__init__.py`. See [engine/banks/fintro/](engine/banks/fintro/).
+   - A CSV or xlsx needs no reader: `load_rows` reads its table by extension. A PDF does: name a
+     module of the package in the yaml (`reader: statement`) whose `read(path)` returns
+     `(rows, source_lines, period)`, or `None` for a file that is not its own. `rows` are dicts
+     under the reader's own column names (the yaml's `names`), `source_lines` one text per row
+     naming where it is in the file (`p3/12`, for the logs and `debug_row`), `period` the
+     `(first, last)` ISO dates the file prints, else `None`. Every reader is offered every PDF;
+     exactly one may claim it. See
+     [engine/banks/argenta_mastercard/statement.py](engine/banks/argenta_mastercard/statement.py).
+   - Optional `archive_check.py` with `check_archive(archive_dir) -> list[str]` (one text per
+     difference), for what only several archived exports together show;
+     [engine/archive_checks.py](engine/archive_checks.py) finds and runs it.
 3. Document it in `engine/banks/<bank>/README.md` with the headings of the Fintro
    README (Export, Columns, Unique row, Field mapping, parsing, Dropped on purpose,
    Markers and conventions, Quirks, Checking), add `engine/banks/<bank>/CLAUDE.md`
@@ -342,4 +359,5 @@ from the file. The command, what it does and what it does not restore:
    [engine/core/csv_validation.py](engine/core/csv_validation.py) matches configs by
    header, and `process_csv.py` imports the bank module dynamically via
    `importlib.import_module(f"engine.banks.{bank_name}")`. The importer needs
-   no change either, as long as the account exists in Firefly with its IBAN.
+   no change either, as long as the account is in Firefly (through the accounts file) with its
+   IBAN or account number.

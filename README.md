@@ -1,18 +1,20 @@
 # Firefly III Feeder
 
-Automated pipeline for ingesting bank-exported CSVs, validating them,
+Automated pipeline for ingesting bank exports (CSV, xlsx, PDF statements), validating them,
 normalizing transactions into a unified model, deduplicating against a
 persistent per-account row state, and importing the result into Firefly III.
 Designed for unattended cron execution on TrueNAS or any Linux host.
 
 ## Overview
 
-- Detects incoming CSVs in `data/incoming/`
-- Auto-detects the bank by matching CSV headers against YAML configs
+- Detects incoming exports in `data/incoming/`: CSV, xlsx, or PDF statements read by a bank's reader
+- Auto-detects the bank by matching the export's header against YAML configs
 - Validates, filters and normalizes each row
 - Deduplicates via a per-account row state, which also records each row's Firefly transaction
 - Imports the normalized rows into Firefly III via its REST API, after setting Firefly's own
   accounts to the accounts file in the archive
+- Checks what only several archived exports together show (card statements against the
+  account that pays them)
 - Keeps every export it received in `archive/`, a private git repo pushed to
   its own remote, so Firefly can always be wiped and reloaded with one command
   (`start-over.bash`; see [docs/archive-and-reload.md](docs/archive-and-reload.md))
@@ -23,6 +25,7 @@ Designed for unattended cron execution on TrueNAS or any Linux host.
 | Bank | Export | Docs |
 |------|--------|------|
 | Fintro | CSV, one per account | [engine/banks/fintro/README.md](engine/banks/fintro/README.md) |
+| Argenta | xlsx, one per account; Mastercard: monthly PDF statement | [engine/banks/argenta/README.md](engine/banks/argenta/README.md) |
 
 What other tools may rely on in the output: [docs/output-contract.md](docs/output-contract.md).
 
@@ -36,11 +39,14 @@ firefly-iii-feeder/
 │   ├── process_csv.py             # Normalizer entry point
 │   ├── regression.py              # Regression test for parser changes
 │   ├── debug_row.py               # Why a row fails or is skipped (any bank)
+│   ├── archive_checks.py          # Checks across archived exports (each bank's archive_check)
 │   ├── core/                      # csv_runtime, csv_validation, parsers,
-│   │                              # xlsx_reader, row_state, completion, runtime
+│   │                              # xlsx_reader, pdf_text, row_state, completion, runtime
 │   ├── banks/
-│   │   └── fintro/                # Per-bank package: README (export, parsing),
-│   │                              # normalize, extract_details, parsers, reconcile, debug_trace
+│   │   ├── fintro/                # Per-bank package: README (export, parsing),
+│   │   │                          # normalize, extract_details, parsers, reconcile, debug_trace
+│   │   ├── argenta/               # Accounts (xlsx); README for the Mastercard too
+│   │   └── argenta_mastercard/    # Card statements (PDF): statement reader, archive_check
 │   └── firefly/                   # api (REST client), import_normalized, accounts
 ├── docs/
 │   ├── output-contract.md         # What other tools may rely on
@@ -48,6 +54,8 @@ firefly-iii-feeder/
 ├── plans/                         # Work in progress; removed once done
 ├── config/
 │   ├── fintro.yaml                # Per-bank config (columns, regex, dedup)
+│   ├── argenta.yaml
+│   ├── argenta_mastercard.yaml    # Names its PDF reader (reader: statement)
 │   ├── accounts.example.yaml      # Template of archive/accounts.yaml (own accounts)
 │   └── app.env                    # FIREFLY_URL, FIREFLY_TOKEN (server only)
 ├── deploy/                        # Root helper script (installed by hand, see AGENTS.md)
@@ -67,9 +75,9 @@ firefly-iii-feeder/
 ## How It Works
 
 Every minute cron starts `firefly-iii-feeder.bash`, which exits at once when there is nothing to
-do. Otherwise it waits until each new CSV is fully uploaded, normalizes it (bank, columns, rows
+do. Otherwise it waits until each new export is fully uploaded, normalizes it (bank, columns, rows
 the account's row state already knows are skipped), archives the original, imports the normalized
-rows into Firefly III, and commits and pushes the archive. Details:
+rows into Firefly III, checks across the archived exports, and commits and pushes the archive. Details:
 [.claude/rules/architectural_patterns.md](.claude/rules/architectural_patterns.md).
 
 ## Requirements

@@ -29,7 +29,7 @@ def validate_and_prepare(
     """
 
     if not csv_rows:
-        raise ValueError("CSV contains no rows.")
+        raise ValueError("Export contains no rows.")
 
     header = list(csv_rows[0].keys())
     columns_cfg = bank_config["columns"]
@@ -190,7 +190,7 @@ def autodetect_bank(csv_rows: list[dict[str, str]], all_bank_configs: dict[str, 
     """
 
     if not csv_rows:
-        raise ValueError("CSV contains no rows, cannot detect bank.")
+        raise ValueError("Export contains no rows, cannot detect bank.")
 
     csv_header = list(csv_rows[0].keys())
     matching_banks: list[dict[str, Any]] = []
@@ -235,8 +235,8 @@ def autodetect_bank(csv_rows: list[dict[str, str]], all_bank_configs: dict[str, 
                 missing_per_bank.append(f"{bank_name}: missing columns: {missing}")
             else:
                 missing_per_bank.append(f"{bank_name}: all columns present (unexpected non-match)")
-        raise ValueError(f"No bank config matches CSV headers {csv_header}. " + " | ".join(missing_per_bank))
+        raise ValueError(f"No bank config matches the export's header {csv_header}. " + " | ".join(missing_per_bank))
 
     # More than one match → ambiguous CSV
     bank_names = [cfg.get("bank", "<unknown>") for cfg in matching_banks]
-    raise ValueError(f"Ambiguous CSV: matches multiple banks: {bank_names}")
+    raise ValueError(f"Ambiguous export: matches multiple banks: {bank_names}")

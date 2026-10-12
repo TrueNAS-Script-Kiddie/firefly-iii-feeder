@@ -85,7 +85,7 @@ def transaction_period(rows: list[dict[str, Any]], date_format: str | None) -> t
 
 def main() -> None:
     if len(sys.argv) != 4:
-        print("Usage: process_csv.py <csv_path> <run_id> <logfile_path>")
+        print("Usage: process_csv.py <file> <run_id> <logfile_path>")
         sys.exit(1)
 
     csv_file_path = sys.argv[1]
@@ -149,7 +149,7 @@ def main() -> None:
                 context,
                 exit_code=65,
                 outcome="structure_failed",
-                message="CSV EMPTY",
+                message="EXPORT EMPTY",
             )
             return
 
@@ -221,7 +221,7 @@ def main() -> None:
                     exit_code=65,
                     outcome="structure_failed",
                     message=(
-                        f"CSV ALL ROWS FILTERED, account unknown: no row has a valid '{partition_by}'"
+                        f"EXPORT ALL ROWS FILTERED, account unknown: no row has a valid '{partition_by}'"
                         if all_filtered
                         else f"ROW STATE: partition_by column '{partition_by}' is empty in first valid row"
                     ),
@@ -235,7 +235,7 @@ def main() -> None:
                     exit_code=65,
                     outcome="structure_failed",
                     message=(
-                        f"CSV contains several values for '{partition_by}' ({', '.join(partition_values)}); "
+                        f"Export contains several values for '{partition_by}' ({', '.join(partition_values)}); "
                         "export one file per account"
                     ),
                 )
@@ -270,7 +270,7 @@ def main() -> None:
                 context,
                 exit_code=0,
                 outcome="all_filtered",
-                message="CSV ALL ROWS FILTERED",
+                message="EXPORT ALL ROWS FILTERED",
             )
             return
 
@@ -396,7 +396,7 @@ def main() -> None:
                 context,
                 exit_code=65,
                 outcome="all_failed",
-                message="CSV ALL FAILED",
+                message="EXPORT ALL FAILED",
             )
             return
 
@@ -405,7 +405,7 @@ def main() -> None:
                 context,
                 exit_code=75,
                 outcome="partial",
-                message="CSV PARTIAL SUCCESS",
+                message="EXPORT PARTIAL SUCCESS",
             )
             return
 
@@ -414,7 +414,7 @@ def main() -> None:
                 context,
                 exit_code=0,
                 outcome="success",
-                message="CSV SUCCESS",
+                message="EXPORT SUCCESS",
             )
             return
 
@@ -423,7 +423,7 @@ def main() -> None:
                 context,
                 exit_code=0,
                 outcome="all_full_duplicates",
-                message="CSV ALL FULL DUPLICATES",
+                message="EXPORT ALL FULL DUPLICATES",
             )
 
     except Exception as e:
