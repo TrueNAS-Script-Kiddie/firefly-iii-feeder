@@ -34,6 +34,10 @@
 #   monthly_payment_date  credit_card only: a date whose day is the day of the month the card
 #                         balance is debited. [Credit card monthly payment date]; the feeder also
 #                         sets [Credit card payment plan] to [Full payment every month].
+#   paid_from             credit_card only: the iban or account_number of the account in this
+#                         file that pays the card off. The statement's repayment line then
+#                         becomes a transfer from that account (the statement does not name it).
+#                         Not a Firefly field.
 #   opening_balance       Balance just before the first imported row (negative for a card that
 #   opening_balance_date  was owed money). Both or neither. Default 0.
 #                         [Opening balance], [Opening balance date]
@@ -61,6 +65,7 @@
   iban: DE89 3704 0044 0532 0130 00  # account the card balance is collected on: makes the
                                      # monthly settlement from the current account a transfer
   account_number: "1234567890"       # customer reference on the card statement
+  paid_from: BE68 5390 0754 7034     # ACME current account
 
 - name: Old savings (closed)
   kind: savings

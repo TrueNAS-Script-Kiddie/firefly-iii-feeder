@@ -46,12 +46,18 @@ ACCOUNT_FIELDS = {
     "active",
     "notes",
     "corrections",
+    "paid_from",
 }
 CORRECTION_FIELDS = {"date", "amount", "counterparty", "description"}
 CORRECTION_PREFIX = "correction|"
 CORRECTION_NOTE = "Correction from the accounts file"
 
 CENT = Decimal("0.01")
+
+# Days a card repayment's two sides may lie apart: the oldest statements date the repayment line
+# about ten days before the paying account's debit. Used by the importer for every transfer between
+# a card and its paid_from account, and by the card's archive check.
+CARD_REPAYMENT_MATCH_DAYS = 15
 
 
 class AccountsFileError(Exception):
@@ -83,6 +89,9 @@ class OwnAccount:
     active: bool
     notes: str  # "" when none
     corrections: list[Correction] = field(default_factory=list)
+    # credit_card only: iban or account_number of the account that pays it off, without spaces,
+    # upper case; "" when none. Read by the importer, never sent to Firefly
+    paid_from: str = ""
 
     @property
     def identifier(self) -> str:
@@ -205,6 +214,14 @@ def parse_account(item: Any) -> OwnAccount:
         if Decimal(opening_balance) == 0:
             opening_balance = opening_balance_date = ""
 
+    paid_from = ""
+    if item.get("paid_from") is not None:
+        if kind != "credit_card":
+            raise ValueError("paid_from is only for kind credit_card")
+        if not isinstance(item["paid_from"], str):
+            raise ValueError(f"paid_from must be quoted text, got {item['paid_from']!r}")
+        paid_from = clean_identifier(parse_text(item["paid_from"], "paid_from"))
+
     corrections = item.get("corrections") or []
     if not isinstance(corrections, list):
         raise ValueError(f"corrections must be a list, got {corrections!r}")
@@ -220,6 +237,7 @@ def parse_account(item: Any) -> OwnAccount:
         active=parse_bool(item.get("active", True), "active"),
         notes=parse_text(item["notes"], "notes") if item.get("notes") is not None else "",
         corrections=[parse_correction(c) for c in corrections],
+        paid_from=paid_from,
     )
 
 
@@ -255,6 +273,17 @@ def load_accounts_file(path: str) -> list[OwnAccount]:
         keys = [correction_key(account, c) for c in account.corrections]
         if len(keys) != len(set(keys)):
             raise AccountsFileError(f"account '{account.name}' lists the same correction twice")
+
+    # A typo would silently book the card's repayments as deposits from outside
+    for account in accounts:
+        payer = seen.get(f"identifier {account.paid_from}") if account.paid_from else None
+        if account.paid_from and payer is None:
+            raise AccountsFileError(
+                f"account '{account.name}': paid_from {account.paid_from} is the iban or account_number of no "
+                "account in the file"
+            )
+        if payer == account.name:
+            raise AccountsFileError(f"account '{account.name}': paid_from names the account itself")
     return accounts
 
 

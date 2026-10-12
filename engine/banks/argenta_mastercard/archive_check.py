@@ -18,7 +18,7 @@ Checks per card:
     debit paid it off, unless the balance before the gap was in the holder's favour: nothing was
     debited, so it carries over;
   - each repayment line ('DOMICILIERING VIA UW BANK', +) is the other side of one debit: same
-    amount, within REPAYMENT_MATCH_DAYS of the line's settlement date (the oldest layouts print
+    amount, within CARD_REPAYMENT_MATCH_DAYS of the line's settlement date (the oldest layouts print
     only one date). A debit's repayment line is on the statement after its own; after a gap that
     statement was never sent, so the debit has none.
 Skipped: debits for statements older than the first archived one (those are missing), and a
@@ -43,13 +43,18 @@ from engine.banks.argenta_mastercard.statement import Statement, read_file
 from engine.core.csv_runtime import load_all_bank_configs, load_rows
 from engine.core.csv_validation import extract_duplicate_key, validate_and_prepare
 from engine.core.runtime import BASE_DIR
-from engine.firefly.accounts import ROLES, AccountsFileError, OwnAccount, clean_identifier, load_accounts_file
+from engine.firefly.accounts import (
+    CARD_REPAYMENT_MATCH_DAYS,
+    ROLES,
+    AccountsFileError,
+    OwnAccount,
+    clean_identifier,
+    load_accounts_file,
+)
 
 CARD_BANK = "argenta_mastercard"
 ACCOUNT_BANK = "argenta"
 DEBIT_TYPE = "Debet ten voordele van BCC"
-# Days between a repayment line's main date and its debit's booking date, as the importer pairs them
-REPAYMENT_MATCH_DAYS = 15
 
 
 @dataclass(frozen=True)
@@ -201,14 +206,14 @@ def check_repayments(
             for debit in debits
             if debit not in claimed
             and debit.amount == -repayment.amount
-            and abs(days_between(debit.booking_date, repayment.main_date)) <= REPAYMENT_MATCH_DAYS
+            and abs(days_between(debit.booking_date, repayment.main_date)) <= CARD_REPAYMENT_MATCH_DAYS
         ]
         if candidates:
             claimed.add(min(candidates, key=lambda d: abs(days_between(d.booking_date, repayment.main_date))))
         else:
             differences.append(
                 f"{repayment.describe()}: no debit of {-repayment.amount} on the account within "
-                f"{REPAYMENT_MATCH_DAYS} days"
+                f"{CARD_REPAYMENT_MATCH_DAYS} days"
             )
     following = {
         before.statement.statement_date: after

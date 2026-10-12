@@ -277,13 +277,26 @@ transaction #id", counted as already present. Firefly gotchas: AGENTS.md "Firefl
     the row.
   - A counterparty account without an IBAN goes to `source_number` / `destination_number`: Firefly
     validates `*_iban` as an IBAN, `*_number` is free text.
-  - A currency disabled in Firefly is enabled (logged); one Firefly doesn't know fails the row.
+  - A currency disabled in Firefly is enabled; one it doesn't know is created (`ensure_currencies`:
+    code as name and symbol, 2 decimals; only Firefly's owner may), both logged. A code that is not
+    three capital letters, or a creation Firefly refuses, fails the row.
   - No counterparty → `(onbekend)`. A withdrawal the bank module marked `is_cash_withdrawal` (`1`)
     always goes to Firefly's Cash account; the counterparty name the bank gives (the ATM) goes in
     front of the description. A new bank only has to set that mark.
+  - Card statement lines that do not name their counterparty: a repayment (`is_card_repayment`)
+    becomes a transfer from the card's `paid_from` account (§14; none → the row fails). A reversal
+    (`is_payment_reversal`) gets the counterparty of the payment it reverses (`reverse_payment`):
+    one search per row (`account_id`, `amount_is`, `currency_is`, `date_after`, `date_before`)
+    gives the withdrawals of the same own account, amount and currency in the
+    `REVERSAL_MATCH_DAYS` (180) before it, and the reversals that may have taken one. Exactly one
+    untaken withdrawal must remain, else the row fails. The notes line `Oorspronkelijke betaling:
+    <date> (<internal_reference>)` ties the two by the payment's `row_key`, so a rebuild ties them
+    the same way. Payments and reversals of this run count too, also in a dry run.
 - **Own transfers: match or create** (`claim_transfer`). A row whose counterparty is an own
   account first claims an existing transfer between the same accounts, same amount, within
-  `TRANSFER_MATCH_DAYS`, whose side (out or in) is still free; else it creates one. Order and
+  `TRANSFER_MATCH_DAYS` (7 days; `CARD_REPAYMENT_MATCH_DAYS`, 15, between a card and its
+  `paid_from` account, either way: the oldest statements date the repayment line about ten days
+  before the debit), whose side (out or in) is still free; else it creates one. Order and
   history coverage of the accounts' CSVs don't matter. The transfer carries only the first side's
   fields; the claiming side's `external_id`, `row_key` and notes stay in its `data/imported/` file.
 
@@ -353,6 +366,9 @@ described in `archive/accounts.yaml`, in the archive repo, so a reload has them 
   Nothing is deleted. The file is the truth: a GUI change to a listed account is overwritten. An
   opening balance of 0 is none (Firefly keeps none for 0). Closed accounts (`active: false`) are
   listed by Firefly and may still be used by id, so their rows import, also at a reload.
+- **`paid_from`** (credit cards only): the `iban` or `account_number` of another account in the
+  file, the one that pays the card off; else the file is invalid, as a typo would book the
+  repayments as deposits from outside. Never sent to Firefly: only the importer reads it (§13).
 - **Unlisted**: an own account in Firefly that the file does not list gives the alert `FIREFLY OWN
   ACCOUNTS NOT IN THE ACCOUNTS FILE` at the end of every run that imports and is not blocked or
   crashed (one mail per drop, not per minute while a run keeps failing).

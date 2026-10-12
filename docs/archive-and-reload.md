@@ -139,7 +139,7 @@ flowchart TD
 ```
 
 "Refused" includes what fails before the POST: no own account with that IBAN, a currency Firefly
-doesn't know, a counterparty that is the row's own account.
+doesn't know and cannot create, a counterparty that is the row's own account.
 
 ### Overlapping exports
 

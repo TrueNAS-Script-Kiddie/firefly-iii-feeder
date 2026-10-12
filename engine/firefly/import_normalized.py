@@ -18,11 +18,16 @@ makes Firefly reject a transaction it already stored, which counts as "already p
 Transfers between own asset accounts appear in both accounts' CSVs but are one
 transaction in Firefly ("match or create"): a row whose counterparty is an own
 asset account first looks for an existing transfer between the same two
-accounts, same amount, dated within TRANSFER_MATCH_DAYS. Each transfer can be
+accounts, same amount, dated within TRANSFER_MATCH_DAYS (CARD_REPAYMENT_MATCH_DAYS
+between a card and its paid_from account). Each transfer can be
 claimed once per side (outgoing / incoming), ever: the row state records which
 row used which transfer. Found -> already present; not found -> the row creates
 the transfer. Order and history coverage of the accounts' CSVs therefore don't
 matter.
+
+Card statements: a repayment line (is_card_repayment) is a transfer from the card's paid_from
+account (accounts file). A reversal line (is_payment_reversal) is a deposit from the counterparty
+of the one earlier withdrawal of the same amount it can reverse, looked up in Firefly.
 
 Own accounts: at the start of every run with files to import, archive/accounts.yaml (if it
 exists) is applied to Firefly first (engine/firefly/accounts.py). An invalid file, or an account
@@ -36,6 +41,7 @@ Usage:
 import argparse
 import collections
 import csv
+import dataclasses
 import glob
 import json
 import os
@@ -45,6 +51,7 @@ import subprocess
 import sys
 import time
 import traceback
+import urllib.parse
 from collections.abc import Callable
 from datetime import date, datetime, timedelta
 from decimal import Decimal
@@ -53,6 +60,7 @@ from typing import Any
 from engine.core.row_state import load_firefly_ids, record_import
 from engine.core.runtime import BASE_DIR, CONFIG, alert, log_event
 from engine.firefly.accounts import (
+    CARD_REPAYMENT_MATCH_DAYS,
     AccountsFileError,
     Applied,
     OwnAccount,
@@ -97,6 +105,14 @@ EXIT_CRASHED = 70
 EXIT_PARTIAL = 75
 
 TRANSFER_MATCH_DAYS = 7
+# How far back a card reversal looks for the payment it reverses
+REVERSAL_MATCH_DAYS = 180
+# Ties a reversal to the payment it reverses by the payment's internal_reference (its row_key, the
+# same after a start-over), so no second reversal takes that payment
+REVERSAL_NOTE = "Oorspronkelijke betaling: {date} ({reference})"
+RE_REVERSAL_NOTE = re.compile(r"^Oorspronkelijke betaling: \d{4}-\d{2}-\d{2} \((.+)\)$", re.MULTILINE)
+# Only an ISO-like code is created in Firefly when it does not know it
+RE_CURRENCY_CODE = re.compile(r"^[A-Z]{3}$")
 UNKNOWN_COUNTERPARTY = "(onbekend)"
 # A 5xx while Firefly answers GET about fails only that row; this many rows in a row means
 # Firefly cannot store anything (database full, migration): an outage, retried every minute
@@ -109,6 +125,18 @@ RE_DUPLICATE = re.compile(r"Duplicate of transaction #(\d+)")
 
 # (source_id, destination_id, amount) -> transfers: {"id": Firefly id, "date": date, "out": used, "in": used}
 TransferPool = dict[tuple[str, str, str], list[dict[str, Any]]]
+# Firefly id of a card -> {"id", "name"} of the account its paid_from names
+Payers = dict[str, dict[str, str]]
+
+
+@dataclasses.dataclass
+class RunPayments:
+    """What this run booked that a later reversal row may need: a dry run sends nothing to search."""
+
+    # {"id", "date", "amount", "currency", "source_id", "destination_name", "reference"}
+    withdrawals: list[dict[str, str]] = dataclasses.field(default_factory=list)
+    # payment reference -> row_key of the reversal that took it
+    reversed: dict[str, str] = dataclasses.field(default_factory=dict)
 
 
 def money(value: str) -> str:
@@ -153,14 +181,35 @@ def ensure_currencies(
     split: dict[str, Any], currencies: dict[str, bool], client: FireflyClient, dry_run: bool, log: Callable[[str], None]
 ) -> None:
     """
-    Enable a disabled currency the split uses (Firefly stores the transaction either way).
-    A currency Firefly doesn't know raises ValueError: creating one needs a name and symbol.
+    Enable a disabled currency the split uses (Firefly stores the transaction either way), and
+    create one Firefly doesn't know, with its code as name and symbol. ValueError when that fails,
+    or when the code is not three capital letters.
     """
     for code in (split.get("currency_code"), split.get("foreign_currency_code")):
         if not code or currencies.get(code):
             continue
         if code not in currencies:
-            raise ValueError(f"Currency {code} unknown to Firefly")
+            if not RE_CURRENCY_CODE.match(code):
+                raise ValueError(f"Currency {code} unknown to Firefly, and not a code of three capital letters")
+            if dry_run:
+                log(f"Would create currency {code}")
+            else:
+                body = {"code": code, "name": code, "symbol": code, "decimal_places": 2, "enabled": True}
+                try:
+                    status, response = client.request("POST", "currencies", body)
+                except FireflyAuthError:
+                    # The token works (the run read Firefly): creating a currency is for Firefly's owner only
+                    raise ValueError(
+                        f"Creating currency {code}: refused; only Firefly's owner may create one"
+                    ) from None
+                if status != 200:
+                    raise ValueError(
+                        f"Creating currency {code}: HTTP {status}: {response.get('message', '')} "
+                        f"{response.get('errors', '')}"
+                    )
+                log(f"Created currency {code}")
+            currencies[code] = True
+            continue
         if dry_run:
             log(f"Would enable currency {code}")
         else:
@@ -204,9 +253,28 @@ def load_transfer_pool(client: FireflyClient, assets: Assets, firefly_ids: dict[
     return pool
 
 
-def claim_transfer(pool: TransferPool, key: tuple[str, str, str], on: date, side: str) -> str | None:
-    """Claim the closest transfer whose side is still free within the match window: its Firefly id."""
-    candidates = [t for t in pool.get(key, []) if not t[side] and abs((t["date"] - on).days) <= TRANSFER_MATCH_DAYS]
+def card_payers(accounts: list[OwnAccount], assets: Assets) -> Payers:
+    """Every card with a paid_from, by its Firefly id: the account that pays it off."""
+    payers: Payers = {}
+    for account in accounts:
+        card = find_asset(assets, account.iban, account.account_number) if account.paid_from else None
+        payer = find_asset(assets, account.paid_from) if card else None
+        if card and payer:
+            payers[card["id"]] = payer
+    return payers
+
+
+def match_days(key: tuple[str, str, str], payers: Payers) -> int:
+    """The match window of a transfer: wider between a card and its paying account, either way."""
+    source, destination, _ = key
+    if payers.get(source, {}).get("id") == destination or payers.get(destination, {}).get("id") == source:
+        return CARD_REPAYMENT_MATCH_DAYS
+    return TRANSFER_MATCH_DAYS
+
+
+def claim_transfer(pool: TransferPool, key: tuple[str, str, str], on: date, side: str, days: int) -> str | None:
+    """Claim the closest transfer whose side is still free within `days`: its Firefly id."""
+    candidates = [t for t in pool.get(key, []) if not t[side] and abs((t["date"] - on).days) <= days]
     if not candidates:
         return None
     transfer = min(candidates, key=lambda t: abs((t["date"] - on).days))
@@ -223,16 +291,97 @@ def mark_transfer_used(pool: TransferPool, key: tuple[str, str, str], firefly_id
     pool.setdefault(key, []).append({"id": firefly_id, "date": on, "out": side == "out", "in": side == "in"})
 
 
+def payment_of(firefly_id: str, split: dict[str, Any]) -> dict[str, str]:
+    """A withdrawal (a split as Firefly or build_split gives it) in the form a reversal compares."""
+    return {
+        "id": firefly_id,
+        "date": str(split["date"])[:10],
+        "amount": money(str(split["amount"])),
+        "currency": split.get("currency_code") or "",
+        "source_id": str(split["source_id"]),
+        "destination_name": split.get("destination_name") or "",
+        # A transaction made in the GUI has none; start-over removes it anyway
+        "reference": split.get("internal_reference") or f"#{firefly_id}",
+    }
+
+
+def reverse_payment(
+    row: dict[str, str], assets: Assets, client: FireflyClient, payments: RunPayments
+) -> tuple[dict[str, str], str]:
+    """
+    A reversal row with the payment it reverses filled in: the one withdrawal from the same own
+    account, same amount and currency, in the REVERSAL_MATCH_DAYS before the row's date, that no
+    other reversal took. Its counterparty becomes the row's, and a notes line names it. Returns the
+    row and the payment's reference. ValueError when none or several qualify.
+    """
+    amount = row["amount"].strip()
+    if not RE_AMOUNT.match(amount) or Decimal(amount) <= 0:
+        raise ValueError(f"Payment reversal with an amount that is no deposit: '{amount}'")
+    if row.get("opposing_account_iban") or row.get("opposing_account_number") or row.get("opposing_account_name"):
+        raise ValueError("Payment reversal with a counterparty: it is taken from the payment it reverses")
+    own = find_asset(assets, row.get("asset_account_iban"), row.get("asset_account_number"))
+    if not own:
+        return row, ""  # build_split fails it with the reason
+    on = date.fromisoformat(row["primary_transaction_date"][:10])
+    earliest = on - timedelta(days=REVERSAL_MATCH_DAYS)
+    amount, currency, row_key = money(amount), row.get("account_currency_code", ""), row.get("row_key", "")
+
+    withdrawals = {payment["id"]: payment for payment in payments.withdrawals}
+    taken: dict[str, str] = {}
+    # A dry run's new account is not in Firefly yet
+    if own["id"].isdigit():
+        # One query: the withdrawals that may be reversed, and the reversals that may have taken one of
+        # them (each dated after its payment, within REVERSAL_MATCH_DAYS)
+        query = (
+            f"account_id:{own['id']} amount_is:{amount} currency_is:{currency} "
+            f"date_after:{earliest} date_before:{on + timedelta(days=REVERSAL_MATCH_DAYS)}"
+        )
+        for group in client.get_all(f"search/transactions?query={urllib.parse.quote(query)}"):
+            for split in group["attributes"]["transactions"]:
+                if split["type"] == "withdrawal" and str(split["source_id"]) == own["id"]:
+                    withdrawals[str(group["id"])] = payment_of(str(group["id"]), split)
+                elif split["type"] == "deposit" and str(split["destination_id"]) == own["id"]:
+                    for reference in RE_REVERSAL_NOTE.findall(split.get("notes") or ""):
+                        taken.setdefault(reference.strip(), split.get("internal_reference") or "")
+    taken.update(payments.reversed)
+
+    # Taken by this same row: sent before, but not recorded (interrupted run)
+    candidates = [
+        payment
+        for payment in withdrawals.values()
+        if payment["source_id"] == own["id"]
+        and payment["amount"] == amount
+        and payment["currency"] == currency
+        and earliest.isoformat() <= payment["date"] < on.isoformat()
+        and taken.get(payment["reference"], row_key) == row_key
+    ]
+    what = f"Reversal of {amount} {currency} on {on}"
+    if not candidates:
+        raise ValueError(
+            f"{what}: no withdrawal of that amount from '{own['name']}' in the {REVERSAL_MATCH_DAYS} days "
+            "before that no other reversal took"
+        )
+    if len(candidates) > 1:
+        listed = "; ".join(f"{p['date']} '{p['destination_name']}' ({p['reference']})" for p in candidates)
+        raise ValueError(f"{what}: {len(candidates)} withdrawals it may reverse: {listed}")
+    payment = candidates[0]
+    note = REVERSAL_NOTE.format(date=payment["date"], reference=payment["reference"])
+    notes = "\n".join(part for part in (row.get("notes", ""), note) if part)
+    return {**row, "opposing_account_name": payment["destination_name"], "notes": notes}, payment["reference"]
+
+
 # ---------------------------------------------------------------------------
 # Row -> Firefly split
 # ---------------------------------------------------------------------------
 def build_split(
     row: dict[str, str],
     assets: Assets,
+    payers: Payers,
 ) -> tuple[str, dict[str, Any], tuple[tuple[str, str, str], str] | None]:
     """
     Return (decision, split, transfer_match). decision: withdrawal / deposit / transfer.
     transfer_match is ((source_id, destination_id, amount), side) for own transfers. Raises ValueError.
+    A reversal row must have its counterparty filled in first (reverse_payment).
     """
     amount = row["amount"].strip()
     if not RE_AMOUNT.match(amount) or Decimal(amount) == 0:
@@ -274,6 +423,16 @@ def build_split(
     opposing_iban = clean_identifier(row.get("opposing_account_iban"))
     opposing_number = row.get("opposing_account_number") or ""
     opposing_asset = find_asset(assets, opposing_iban, opposing_number)
+    # The statement does not name the account that pays the card off: the accounts file does
+    if row.get("is_card_repayment") == "1":
+        if opposing_iban or opposing_number or row.get("opposing_account_name"):
+            raise ValueError("Card repayment with a counterparty: it is the card's paid_from account")
+        if own["id"] not in payers:
+            raise ValueError(
+                f"Card repayment, but '{own['name']}' has no paid_from in the accounts file: "
+                "the account that pays the card off is unknown"
+            )
+        opposing_asset = payers[own["id"]]
     if opposing_asset is own:
         raise ValueError(f"Counterparty {opposing_iban or opposing_number} is the row's own account")
     outgoing = amount.startswith("-")
@@ -288,7 +447,7 @@ def build_split(
         if opposing_name:
             description = f"{opposing_name}: {description}" if description else opposing_name
         opposing_name = ""
-    elif not opposing_name and not opposing_iban and not opposing_number:
+    elif not opposing_name and not opposing_iban and not opposing_number and not opposing_asset:
         opposing_name = UNKNOWN_COUNTERPARTY
 
     # Firefly requires a description; fall back to what identifies the transaction best
@@ -365,6 +524,8 @@ def import_file(
     run_note: str,
     rows_5xx_in_a_row: collections.Counter,
     firefly_ids: dict[str, str],
+    payers: Payers,
+    payments: RunPayments,
 ) -> collections.Counter:
     name = os.path.basename(path)
     # '<base>-normalized[-partial].csv' -> '<base>': every output keeps the normalizer's name,
@@ -403,8 +564,12 @@ def import_file(
         if row_key and firefly_ids.get(row_key):
             counts["already present"] += 1
             continue
+        reversed_reference = ""
         try:
-            decision, split, transfer_match = build_split(row, assets)
+            to_send = row
+            if row.get("is_payment_reversal") == "1":
+                to_send, reversed_reference = reverse_payment(row, assets, client, payments)
+            decision, split, transfer_match = build_split(to_send, assets, payers)
             ensure_currencies(split, currencies, client, dry_run, log)
         except (ValueError, KeyError, ArithmeticError) as exc:
             failed.append((line_no, row, f"line {line_no}: {exc}"))
@@ -414,7 +579,7 @@ def import_file(
 
         if transfer_match:
             key, side = transfer_match
-            claimed = claim_transfer(pool, key, date.fromisoformat(split["date"]), side)
+            claimed = claim_transfer(pool, key, date.fromisoformat(split["date"]), side, match_days(key, payers))
             if claimed:
                 counts["transfer already present"] += 1
                 outcomes[row_key] = firefly_ids[row_key] = claimed
@@ -465,6 +630,10 @@ def import_file(
             log(reason)
             continue
         outcomes[row_key] = firefly_ids[row_key] = firefly_id
+        if decision == "withdrawal":
+            payments.withdrawals.append(payment_of(firefly_id, split))
+        if reversed_reference:
+            payments.reversed[reversed_reference] = row_key
 
         if transfer_match:
             # The other side of this transfer must find it later, in this run or a future one
@@ -706,6 +875,8 @@ def import_all(args: argparse.Namespace) -> int:
             else:
                 firefly_accounts = client.get_all("accounts?type=asset")
             assets = index_asset_accounts(firefly_accounts)
+            payers = card_payers(accounts or [], assets)
+            payments = RunPayments()
             currencies = load_currencies(client)
             firefly_ids = load_firefly_ids(ROW_STATE_DIR)
             pool = load_transfer_pool(client, assets, firefly_ids)
@@ -741,6 +912,8 @@ def import_all(args: argparse.Namespace) -> int:
                     run_note,
                     rows_5xx_in_a_row,
                     firefly_ids,
+                    payers,
+                    payments,
                 )
                 if args.dry_run:
                     print(f"  {dict(counts)}")
