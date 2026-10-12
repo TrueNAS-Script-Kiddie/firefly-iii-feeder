@@ -81,6 +81,7 @@ into the parser (`debug_row` shows where a row gets stuck).
 | [engine/archive_checks.py](engine/archive_checks.py) | Checks across the archived exports: runs every `engine/banks/<bank>/archive_check.py` |
 | [docs/output-contract.md](docs/output-contract.md) | What other tools may rely on in the normalized output and in Firefly |
 | [docs/archive-and-reload.md](docs/archive-and-reload.md) | The archive, what happens to each file and row, `start-over.bash`, setup, restore on a new server |
+| [docs/adding-a-bank.md](docs/adding-a-bank.md) | How a new bank is added: questions, survey, one subagent per step, load, example prompts |
 | `plans/` | Plans for work in progress; once done, their lasting facts move into the docs and the plan is deleted (git keeps it) |
 | [engine/regression.py](engine/regression.py) | Regression test: every row of the bank exports through a git ref and the working tree, reporting each changed result |
 | [engine/debug_row.py](engine/debug_row.py) | Why a row fails or is skipped, for every bank; a bank adds its own trace in an optional `engine/banks/<bank>/debug_trace.py` (`show_trace(row)`) |
@@ -330,6 +331,9 @@ from the file. The command, what it does and what it does not restore:
 [docs/archive-and-reload.md](docs/archive-and-reload.md), "`start-over.bash`".
 
 ## Adding a New Bank
+
+The way of working (questions, survey, one subagent per step, load, example prompts):
+[docs/adding-a-bank.md](docs/adding-a-bank.md). The code-level steps:
 
 1. Create `config/<bank>.yaml` — required/optional columns, regex rules,
    filter values, `duplicate_key`, and `date_format` on `primary_transaction_date`
