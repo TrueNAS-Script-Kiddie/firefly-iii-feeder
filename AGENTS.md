@@ -282,13 +282,13 @@ the field mapping: [docs/output-contract.md](docs/output-contract.md). Gotchas:
    `FIREFLY_TOKEN` (a Personal Access Token of Firefly's owner, the only user who may create a
    currency Firefly doesn't know yet; it expires after at most one year → "FIREFLY IMPORT
    BLOCKED" alert). The SFTP watcher excludes the file, so a local copy is never uploaded over it.
-6. **Feeder folder** owned by the cron user, `firefly-iii-feeder.bash` executable (SFTP sets no
-   execute bit, a git clone does).
+6. **Feeder folder** owned by the cron user.
 7. **Root helper and its sudo rule** (below).
 8. **Archive repo**: [docs/archive-and-reload.md](docs/archive-and-reload.md), "Setup".
 9. **Cron job** in the TrueNAS GUI: every minute, as the user that owns the folder, "Hide
    Standard Error" off (stderr = alert email), with the encrypted-dataset lock-guard in the
-   Command field.
+   Command field: `if test -e <path>; then bash <path>; fi`. `bash` in front, because every SFTP
+   upload of the script drops its execute bit, and a script cron cannot execute fails silently.
 
 ## Root helper (running balances)
 

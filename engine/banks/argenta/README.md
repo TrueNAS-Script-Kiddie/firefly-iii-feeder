@@ -264,6 +264,12 @@ In `archive/accounts.yaml` (template [config/accounts.example.yaml](../../../con
   off (so the repayment line is the other side of that debit).
 - **Term deposit**: `kind: savings`, `account_number` = the deposit number, `active: false` once
   it expired: its start and settlement are transfers, its interest income from `Argenta`.
+- **Opening balances**: the xlsx has no balance column, and its history is shorter than other
+  banks' exports, whose transfers to the account land before its first row. So: today's balance
+  (Argenta app) minus the sum of all the account's transactions in Firefly after the load, dated
+  before the oldest of them. For the card, whose statements start later than the current account
+  pays them: the oldest statement's previous balance (negative when owed) minus the transfers
+  into the card before the debit its repayment line matches, dated before the oldest of those.
 
 ## Quirks
 

@@ -38,8 +38,10 @@
 #                         file that pays the card off. The statement's repayment line then
 #                         becomes a transfer from that account (the statement does not name it).
 #                         Not a Firefly field.
-#   opening_balance       Balance just before the first imported row (negative for a card that
-#   opening_balance_date  was owed money). Both or neither. Default 0.
+#   opening_balance       Balance just before the account's oldest transaction in Firefly, also
+#   opening_balance_date  a transfer another account's export brings in: today's balance minus the
+#                         sum of all its transactions (negative for a card that was owed money).
+#                         Both or neither. Default 0.
 #                         [Opening balance], [Opening balance date]
 #   active                false for a closed account. Default true. [Active]
 #   corrections           Bookings no export contains (e.g. interest of a closed account without
