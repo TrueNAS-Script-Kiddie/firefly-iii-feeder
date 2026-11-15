@@ -96,7 +96,8 @@ commands and the infrastructure come after it.
     either user creates there gets the group. The feeder sets `umask 002`, so its files stay
     group-writable (a hand fix through the share edits a file the feeder archived). Checked with
     `ls -l`; POSIX ACLs (the dataset has `acltype posix`) only if this proves too weak.
-12. ✅ **Config at every import run.** A run with work feeds `accounts`, `categories`, `tags`,
+12. ✅ **Config at every import run.** A run with files to import (not one that only retries a
+    pending follow-up or push) feeds `accounts`, `categories`, `tags`,
     `rules` and `transactions-without-export` before importing (as it applies the accounts file
     today), and the classification overrides after, so new rows meet the current classification.
     `feed` by hand is for "now" and for applying a changed classification to the history. From
@@ -150,6 +151,22 @@ commands and the infrastructure come after it.
 8. **The feeder grows** from an importer to a manager of Firefly's configuration: more code in a
    public repo to maintain, and (with Firefly's rules) a file format tied to Firefly's API, which
    changes between versions (6.7's rule and mass-edit changes).
+9. **Where the own user writes** (decisions 10 and 11): the feeder folder stays the share user's,
+   but the feeder writes there: `.process.lock`, `data-before-start-over/`, Python's `__pycache__`.
+   The lock cannot move into `data/`: a wipe moves `data/` aside while holding it, and the next
+   cron run would lock a new file. The "runs as the folder's owner" check must look at `data/`.
+10. **Classification in the POST and the duplicate hash** (if the feeder classifies): Firefly's hash
+    covers every field. A run interrupted before the row state is written relies on that hash at
+    the retry; a rule or override changed in between gives another hash, and the row is stored
+    twice. Classification as a separate `PUT`, or the Firefly id recorded per row.
+11. **A transfer has two bank rows and one classification** (if the feeder classifies): the rows of
+    both accounts can give different results, and the first to arrive would win. Name the winner
+    (the source side?).
+12. **`rebuild accounts`** wipes every transaction and moves `data/` aside, but `feed accounts`
+    queues no export: Firefly stays without transactions. Let it imply `transactions`, or refuse.
+13. **Budgets, subscriptions, piggy banks, recurring transactions** are no kind, so not built from
+    the data repo, and `wipe accounts` removes the piggy banks and recurring transactions. Kinds
+    of their own later, or out of scope in the goal.
 
 ## Phase 1 — Snapshot (done 2026-10-14)
 
@@ -170,8 +187,9 @@ The engine (open point 1); then the formats of `rules.yaml` and both CSV files, 
 
 ## Phase 4 — Commands
 
-1. **Dispatch**: subcommands in `firefly-iii-feeder.bash` after the idle exit (no arguments = cron,
-   unchanged); every subcommand checks it runs as the folder's owner (as `start-over.bash` does),
+1. **Dispatch**: subcommands in `firefly-iii-feeder.bash`. Whether there is an argument is tested
+   before the idle exit (`(($#))`, a builtin), so a subcommand also runs when nothing is pending;
+   the dispatch itself comes after it (no arguments = cron, unchanged). Every subcommand checks it runs as the folder's owner (as `start-over.bash` does),
    waits for the lock, then calls the Python command module. Re-measure the idle run.
 2. **`wipe accounts | transactions | all`**: ported from `start-over.bash` (repeat `destroy` on
    504, purge, `data/` aside, `WIPE` confirmation); `--dry-run` says what would go.
@@ -201,12 +219,17 @@ The engine (open point 1); then the formats of `rules.yaml` and both CSV files, 
    helper; the data repo's deploy key and ssh config into its `.ssh/`.
 2. **Desktop clone of the data repo** (sparse, open point 5); the config files are changed there
    and pushed, no longer through the share.
-3. **Cron git on its own paths**: `git add originals unprocessed` instead of `git add -A`; a run
-   with work starts with `git pull --rebase` (open point 2) and pulls again before a push that was
-   refused. A hand fix to an export through the share stays committed by cron (it is in
-   `originals/`). `feed` pulls first.
+3. **Cron git on its own paths**: `git add originals unprocessed` instead of `git add -A`. A run
+   with work first commits what is pending in those paths (a hand fix to an export through the
+   share: `git pull --rebase` refuses while a tracked file is modified), then pulls (open point 2),
+   and pulls again before a push that was refused. The pull runs under the lock, so it gets a
+   timeout. A modified file outside those paths (a config file changed through the share) alerts
+   once: nothing commits it, and it blocks every pull. `feed` pulls first.
 4. **SSH wrapper**: source in `deploy/`, installed by hand per server like the root helper; the
-   key's `authorized_keys` line forces it; whitelist `feed` and `export`. The user field in the
+   key's `authorized_keys` line forces it; whitelist `feed` and `export`, with every argument checked against a fixed list and
+   `export`'s folder kept under one fixed base (the caller chooses that path). The user field in the
    TrueNAS GUI ("Public SSH Key") is that same file, so the line can be set there.
-5. Docs: AGENTS.md "Server access", "Running" and "Setup", docs/archive-and-reload.md (rules 7 and
-   10, "Setup", "Restore on a new server").
+5. Docs: AGENTS.md "Nothing personal" and "Rebuild from scratch" (both say classification is
+   outside the feeder), "Key Directories", "Server access", "Running", "Setup" and "Start Over";
+   architectural_patterns.md §11, §13 and §14; README.md; docs/output-contract.md;
+   docs/archive-and-reload.md (rules 7 and 10, "Setup", "Restore on a new server").
