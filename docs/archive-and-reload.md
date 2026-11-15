@@ -272,7 +272,8 @@ that still fails alerts again and stays in `unprocessed/`. The reload takes abou
 - `config/app.env` and the rest of the one-time setup (AGENTS.md "Setup").
 - Own accounts: not restored but repaired from `accounts.yaml` (default), or rebuilt from it
   (`--wipe-accounts`). After `--wipe-accounts` their piggy banks and recurring transactions are
-  gone, and the accounts have new Firefly ids.
+  gone, and the accounts have new Firefly ids: user preferences that name accounts by id (the
+  dashboard's home screen accounts) point at nothing until set again.
 - Classification: rules, categories and tags stay in Firefly but no longer hold any transaction.
 - Anything entered by hand in Firefly: every transaction and every expense/revenue account is
   wiped, not only what the feeder created.

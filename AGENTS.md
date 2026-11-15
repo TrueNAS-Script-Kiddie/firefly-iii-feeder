@@ -290,6 +290,10 @@ the field mapping: [docs/output-contract.md](docs/output-contract.md). Gotchas:
    Standard Error" off (stderr = alert email), with the encrypted-dataset lock-guard in the
    Command field: `if test -e <path>; then bash <path>; fi`. `bash` in front, because every SFTP
    upload of the script drops its execute bit, and a script cron cannot execute fails silently.
+10. **`PHP_MEMORY_LIMIT` = `1G`** for Firefly (TrueNAS app: the upper "Additional Environment
+    Variables"; the lower list is the data importer's). At the image's default 256 MB, Firefly
+    answers 500 to a report over many years of every own account, and to a rule run matching
+    ~9,000 transactions.
 
 ## Root helper (running balances)
 

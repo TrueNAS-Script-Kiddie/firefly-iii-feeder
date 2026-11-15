@@ -121,8 +121,9 @@ commands and the infrastructure come after it.
 1. **One classification engine or two.** The biggest open choice; phase 2 decides it.
    - *Firefly's rules, with the overrides on top*: `rules.yaml` holds Firefly's rule groups and
      rules (triggers and actions by their API names), fed into Firefly. Firefly applies them on
-     import; a changed rule needs `POST /rule-groups/{id}/trigger` over the whole history
-     (~14,500 transactions, time unmeasured), and every override must be applied again after it.
+     import; a changed rule needs a trigger over the whole history (~14,500 transactions; measured
+     in phase 2, see its notes in the private finance repo), and every override must be applied
+     again after it.
      Firefly also runs rules on every update by default (`apply_rules` defaults to true on
      `PUT /transactions`), so the feeder's own updates must send `apply_rules: false`. Two engines,
      an order to keep, and slow rounds when rules change often.
